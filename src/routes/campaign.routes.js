@@ -1,0 +1,50 @@
+const express = require('express');
+const { body } = require('express-validator');
+const campaignController = require('../controllers/campaign.controller');
+const { auth } = require('../middleware/auth.middleware');
+
+const router = express.Router();
+
+// Apply auth middleware to all routes
+router.use(auth);
+
+// Get all campaigns
+router.get('/', campaignController.getCampaigns);
+
+// Get campaign by ID
+router.get('/:id', campaignController.getCampaign);
+
+// Get campaign statistics
+router.get('/:id/stats', campaignController.getCampaignStats);
+
+// Create a new campaign
+router.post(
+  '/',
+  [
+    body('name', 'Campaign name is required').notEmpty(),
+    body('subject', 'Subject line is required').notEmpty(),
+    body('templateId', 'Template ID is required').notEmpty(),
+    body('contactListId', 'Contact list ID is required').notEmpty(),
+    body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
+  ],
+  campaignController.createCampaign
+);
+
+// Update a campaign
+router.put(
+  '/:id',
+  [
+    body('name').optional(),
+    body('subject').optional(),
+    body('templateId').optional(),
+    body('contactListId').optional(),
+    body('status').optional().isIn(['draft', 'scheduled', 'sending', 'completed']).withMessage('Invalid status value'),
+    body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
+  ],
+  campaignController.updateCampaign
+);
+
+// Delete a campaign
+router.delete('/:id', campaignController.deleteCampaign);
+
+module.exports = router; 
