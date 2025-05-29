@@ -127,6 +127,21 @@ export class EmailCampaignDurableObject {
   
   // Handle requests to this Durable Object
   async fetch(request) {
+    // Add CORS headers to all responses from the Durable Object
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': 'https://launch.gravitypointmedia.com',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    };
+
+    // Handle OPTIONS requests (CORS preflight) directly in the Durable Object
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: corsHeaders
+      });
+    }
+    
     const url = new URL(request.url);
     const path = url.pathname.slice(1).split('/');
     
@@ -134,7 +149,7 @@ export class EmailCampaignDurableObject {
       const campaignData = await request.json();
       await this.initialize(campaignData);
       return new Response(JSON.stringify({ status: 'initialized' }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     }
     
@@ -142,7 +157,7 @@ export class EmailCampaignDurableObject {
       // Start processing the campaign asynchronously
       this.processCampaign().catch(err => console.error('Campaign processing error:', err));
       return new Response(JSON.stringify({ status: 'started' }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     }
     
@@ -152,25 +167,87 @@ export class EmailCampaignDurableObject {
       const progress = await this.storage.get('progress');
       
       return new Response(JSON.stringify({ status, stats, progress }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
     }
     
-    return new Response('Not found', { status: 404 });
+    return new Response('Not found', { 
+      status: 404,
+      headers: { ...corsHeaders }
+    });
   }
 }
 
 // Main worker that dispatches requests to the appropriate Durable Object
 export default {
   async fetch(request, env) {
+    // Add CORS headers to all responses
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': 'https://launch.gravitypointmedia.com',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    };
+
+    // Handle OPTIONS requests (CORS preflight)
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: corsHeaders
+      });
+    }
+
     const url = new URL(request.url);
     const path = url.pathname.slice(1).split('/');
     
+    // Handle authentication routes
+    if (path[0] === 'auth') {
+      // Handle login
+      if (path[1] === 'login' && request.method === 'POST') {
+        try {
+          // You would implement actual authentication logic here
+          // For now, returning a success response to test CORS
+          return new Response(
+            JSON.stringify({ success: true, token: 'sample-token' }),
+            { 
+              status: 200, 
+              headers: {
+                'Content-Type': 'application/json',
+                ...corsHeaders
+              }
+            }
+          );
+        } catch (error) {
+          return new Response(
+            JSON.stringify({ success: false, error: error.message }),
+            { 
+              status: 400, 
+              headers: {
+                'Content-Type': 'application/json',
+                ...corsHeaders
+              }
+            }
+          );
+        }
+      }
+      
+      // You can add more auth routes here as needed
+    }
+    
+    // Handle campaign routes
     if (path[0] === 'campaign') {
       const campaignId = path[1];
       
       if (!campaignId) {
-        return new Response('Campaign ID required', { status: 400 });
+        return new Response(
+          JSON.stringify({ success: false, error: 'Campaign ID required' }),
+          { 
+            status: 400, 
+            headers: {
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          }
+        );
       }
       
       // Get a stub for the campaign Durable Object
@@ -183,7 +260,17 @@ export default {
       newUrl.pathname = '/' + subpath;
       
       const newRequest = new Request(newUrl, request);
-      return stub.fetch(newRequest);
+      
+      // Forward response but add CORS headers
+      const response = await stub.fetch(newRequest);
+      
+      // Create a new response with CORS headers
+      const originalHeaders = Object.fromEntries(response.headers.entries());
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: { ...originalHeaders, ...corsHeaders }
+      });
     }
     
     if (path[0] === 'pixel' && path[1]) {
@@ -214,12 +301,23 @@ export default {
         { 
           headers: { 
             'Content-Type': 'image/gif',
-            'Cache-Control': 'no-store' 
+            'Cache-Control': 'no-store',
+            ...corsHeaders 
           } 
         }
       );
     }
     
-    return new Response('Not found', { status: 404 });
+    // Return a 404 with CORS headers for unmatched routes
+    return new Response(
+      JSON.stringify({ success: false, error: 'Not found' }), 
+      {
+        status: 404,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      }
+    );
   }
-}; 
+};

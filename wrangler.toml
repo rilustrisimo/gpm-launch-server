@@ -3,6 +3,15 @@ main = "workers/emailWorker.js"
 compatibility_date = "2023-10-30"
 compatibility_flags = ["durable_object_alarms"]
 
+# Custom domain configuration
+workers_dev = true
+routes = [
+  "worker.gravitypointmedia.com/*"
+]
+
+[triggers]
+crons = []
+
 [durable_objects]
 bindings = [
   { name = "EMAIL_CAMPAIGN", class_name = "EmailCampaignDurableObject" }
@@ -17,10 +26,15 @@ AWS_REGION = "us-east-1"
 EMAIL_PROVIDER = "ses"
 TRACKING_URL = "https://trk.gravitypointmedia.com"
 
+# KV bindings for the main environment
+kv_namespaces = [
+  { binding = "EMAIL_TRACKING", id = "93e0cd15ee104d4fad6532fd73eabd96" }
+]
+
 # Production environment
 [env.production]
 kv_namespaces = [
-  { binding = "GPM_EMAIL_TRACKING", id = "93e0cd15ee104d4fad6532fd73eabd96" }
+  { binding = "EMAIL_TRACKING", id = "93e0cd15ee104d4fad6532fd73eabd96" }
 ]
 
 [env.production.vars]
@@ -47,3 +61,6 @@ batch_limit = 50      # Email batch size
 # Analytics and monitoring
 usage_model = "bundled"
 logpush = true 
+
+[observability.logs]
+enabled = true
