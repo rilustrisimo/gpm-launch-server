@@ -13,9 +13,6 @@ const contactListRoutes = require('./routes/contactList.routes');
 const statsRoutes = require('./routes/stats.routes');
 const validationRoutes = require('./routes/validation');
 
-// Import middleware
-const corsMiddleware = require('./middleware/cors.middleware');
-
 const app = express();
 const PORT = process.env.PORT || 5000;
 
