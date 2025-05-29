@@ -9,6 +9,15 @@ The system consists of two main components:
 1. **Node.js API Server**: Handles authentication, data storage, and business logic
 2. **Cloudflare Workers**: Processes email campaigns asynchronously for maximum scalability
 
+## Security Warning ⚠️
+
+**IMPORTANT**: This project uses sensitive credentials for AWS, database, and other services. 
+
+- Never commit credentials to Git
+- Use `.env.example` as a template and create your own `.env.production` file
+- Store actual credentials using Cloudflare Worker Secrets for production
+- See [CREDENTIALS.md](./docs/CREDENTIALS.md) for security best practices
+
 ### Email Campaign Processing Flow
 
 1. Campaign is created in the main database via Node.js API
