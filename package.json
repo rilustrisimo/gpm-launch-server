@@ -6,10 +6,10 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon --watch src src/server.js",
-    "migrate": "sequelize-cli db:migrate",
-    "seed": "sequelize-cli db:seed:all",
+    "migrate": "npx sequelize-cli db:migrate",
+    "seed": "npx sequelize-cli db:seed:all",
     "test": "jest",
-    "vercel-build": "npm install mysql2 && npm run migrate"
+    "vercel-build": "npm install && npx sequelize-cli db:migrate"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -23,12 +23,12 @@
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.9.1",
     "sequelize": "^6.37.1",
+    "sequelize-cli": "^6.6.2",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",
     "nodemon": "^3.0.3",
-    "sequelize-cli": "^6.6.2",
     "vercel": "^33.5.1"
   }
 }
