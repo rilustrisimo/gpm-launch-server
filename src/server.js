@@ -57,20 +57,34 @@ app.use((err, req, res, next) => {
 // Database connection and server start
 const startServer = async () => {
   try {
-    await sequelize.authenticate();
-    console.log('Database connection has been established successfully.');
-    
-    if (process.env.NODE_ENV !== 'production') {
+    // In production (Vercel) environment, we don't need to keep the connection open
+    // Just test it during startup to validate config
+    if (process.env.NODE_ENV === 'production') {
+      await sequelize.authenticate({ retry: { max: 3 } });
+      console.log('Database connection test successful');
+    } else {
+      await sequelize.authenticate();
+      console.log('Database connection has been established successfully.');
+      
       app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
       });
     }
   } catch (error) {
     console.error('Unable to connect to the database:', error);
-    process.exit(1);
+    // Don't exit in production - just log the error and continue
+    if (process.env.NODE_ENV !== 'production') {
+      process.exit(1);
+    }
   }
 };
 
-startServer();
+// In Vercel's serverless environment, we don't want to block deployment
+// on database connection, as each function invocation will establish its own connection
+if (process.env.NODE_ENV === 'production') {
+  console.log('Production environment detected, continuing deployment');
+} else {
+  startServer();
+}
 
 module.exports = app;

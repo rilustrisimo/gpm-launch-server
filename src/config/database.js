@@ -23,6 +23,18 @@ module.exports = {
     database: process.env.DB_DATABASE,
     host: process.env.DB_HOST,
     dialect: process.env.DB_DIALECT || 'mysql',
-    logging: false
+    logging: false,
+    dialectOptions: {
+      ssl: process.env.DB_SSL === 'true' ? {
+        rejectUnauthorized: false
+      } : false,
+      connectTimeout: 60000
+    },
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000
+    }
   }
 }; 
