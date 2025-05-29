@@ -31,6 +31,11 @@ app.use('/api/contact-lists', contactListRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/validate', validationRoutes);
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 // Error handler middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -41,15 +46,23 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-app.listen(PORT, async () => {
-  console.log(`Server running on port ${PORT}`);
+// Database connection and server start
+const startServer = async () => {
   try {
     await sequelize.authenticate();
     console.log('Database connection has been established successfully.');
+    
+    if (process.env.NODE_ENV !== 'production') {
+      app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+      });
+    }
   } catch (error) {
     console.error('Unable to connect to the database:', error);
+    process.exit(1);
   }
-});
+};
+
+startServer();
 
 module.exports = app;
