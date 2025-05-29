@@ -2,6 +2,7 @@ const express = require('express');
 const { body } = require('express-validator');
 const contactController = require('../controllers/contact.controller');
 const { auth } = require('../middleware/auth.middleware');
+const ContactList = require('../models/contactList');
 
 const router = express.Router();
 
@@ -21,10 +22,19 @@ router.post(
     body('email', 'Please include a valid email').isEmail(),
     body('firstName').optional(),
     body('lastName').optional(),
-    body('company').optional(),
+    body('phone').optional(),
     body('status').optional().isIn(['active', 'unsubscribed', 'bounced']).withMessage('Invalid status value'),
     body('metadata').optional(),
-    body('listIds').optional().isArray().withMessage('listIds must be an array')
+    body('listId').optional().isUUID().withMessage('List ID must be a valid UUID'),
+    body('listId').optional().custom(async (value) => {
+      if (value) {
+        const list = await ContactList.findByPk(value);
+        if (!list) {
+          throw new Error('Contact list not found');
+        }
+      }
+      return true;
+    })
   ],
   contactController.createContact
 );
@@ -35,15 +45,49 @@ router.put(
   [
     body('firstName').optional(),
     body('lastName').optional(),
-    body('company').optional(),
+    body('phone').optional(),
     body('status').optional().isIn(['active', 'unsubscribed', 'bounced']).withMessage('Invalid status value'),
     body('metadata').optional(),
-    body('listIds').optional().isArray().withMessage('listIds must be an array')
+    body('listId').optional().isUUID().withMessage('List ID must be a valid UUID'),
+    body('listId').optional().custom(async (value) => {
+      if (value) {
+        const list = await ContactList.findByPk(value);
+        if (!list) {
+          throw new Error('Contact list not found');
+        }
+      }
+      return true;
+    })
   ],
   contactController.updateContact
 );
 
 // Delete a contact
 router.delete('/:id', contactController.deleteContact);
+
+// Import contacts
+router.post(
+  '/import',
+  [
+    body('contacts').isArray().withMessage('Contacts must be an array'),
+    body('contacts.*.email').isEmail().withMessage('Invalid email address'),
+    body('contacts.*.firstName').optional(),
+    body('contacts.*.lastName').optional(),
+    body('contacts.*.phone').optional(),
+    body('contacts.*.status').optional().isIn(['active', 'unsubscribed', 'bounced']).withMessage('Invalid status value'),
+    body('contacts.*.metadata').optional(),
+    body('listId').optional().isUUID().withMessage('List ID must be a valid UUID'),
+    body('listId').optional().custom(async (value) => {
+      if (value) {
+        const list = await ContactList.findByPk(value);
+        if (!list) {
+          throw new Error('Contact list not found');
+        }
+      }
+      return true;
+    })
+  ],
+  contactController.importContacts
+);
 
 module.exports = router; 

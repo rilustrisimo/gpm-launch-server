@@ -1,11 +1,15 @@
 const { Campaign, Template, ContactList, CampaignStat, Contact, User, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const { validationResult } = require('express-validator');
+const schedulerService = require('../services/schedulerService');
 
 // Get all campaigns
 exports.getCampaigns = async (req, res) => {
   try {
     const { status, search } = req.query;
+    const { page = 1, limit = 50 } = req.query;
+    const offset = (page - 1) * limit;
+    
     let whereClause = { userId: req.user.id };
     
     // Filter by status if provided
@@ -18,7 +22,8 @@ exports.getCampaigns = async (req, res) => {
       whereClause.name = { [Op.like]: `%${search}%` };
     }
 
-    const campaigns = await Campaign.findAll({
+    // Use findAndCountAll to get both the rows and total count
+    const { count, rows: campaigns } = await Campaign.findAndCountAll({
       where: whereClause,
       include: [
         {
@@ -32,12 +37,20 @@ exports.getCampaigns = async (req, res) => {
           attributes: ['id', 'name', 'count']
         }
       ],
+      limit: parseInt(limit),
+      offset: parseInt(offset),
       order: [['createdAt', 'DESC']]
     });
 
     return res.status(200).json({
       success: true,
-      campaigns
+      campaigns,
+      total: count,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(count / limit)
+      }
     });
   } catch (error) {
     console.error('Get campaigns error:', error);
@@ -385,4 +398,98 @@ exports.getCampaignStats = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-}; 
+};
+
+// Schedule a campaign
+exports.scheduleCampaign = async (req, res) => {
+  try {
+    const { scheduledFor } = req.body;
+    
+    if (!scheduledFor) {
+      return res.status(400).json({
+        success: false,
+        message: 'Scheduled date is required'
+      });
+    }
+
+    const campaign = await Campaign.findOne({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found or access denied'
+      });
+    }
+
+    if (campaign.status !== 'draft') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only draft campaigns can be scheduled'
+      });
+    }
+
+    // Schedule the campaign
+    const scheduledCampaign = await schedulerService.scheduleCampaign(
+      campaign.id,
+      new Date(scheduledFor)
+    );
+
+    return res.status(200).json({
+      success: true,
+      campaign: scheduledCampaign
+    });
+  } catch (error) {
+    console.error('Schedule campaign error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error scheduling campaign',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Cancel a scheduled campaign
+exports.cancelSchedule = async (req, res) => {
+  try {
+    const campaign = await Campaign.findOne({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found or access denied'
+      });
+    }
+
+    if (campaign.status !== 'scheduled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only scheduled campaigns can be cancelled'
+      });
+    }
+
+    // Cancel the scheduled campaign
+    const cancelledCampaign = await schedulerService.cancelScheduledCampaign(campaign.id);
+
+    return res.status(200).json({
+      success: true,
+      campaign: cancelledCampaign
+    });
+  } catch (error) {
+    console.error('Cancel schedule error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error cancelling scheduled campaign',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

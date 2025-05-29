@@ -29,12 +29,21 @@ module.exports = (sequelize, DataTypes) => {
     addedAt: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
+    },
+    createdAt: {
+      type: DataTypes.DATE,
+      allowNull: false
+    },
+    updatedAt: {
+      type: DataTypes.DATE,
+      allowNull: false
     }
   }, {
     sequelize,
     modelName: 'ContactListContacts',
-    tableName: 'ContactListContacts'
+    tableName: 'ContactListContacts',
+    timestamps: true
   });
   
   return ContactListContacts;
-}; 
+};

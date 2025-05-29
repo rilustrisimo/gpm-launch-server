@@ -47,4 +47,10 @@ router.put(
 // Delete a campaign
 router.delete('/:id', campaignController.deleteCampaign);
 
+// Schedule a campaign
+router.post('/:id/schedule', campaignController.scheduleCampaign);
+
+// Cancel a scheduled campaign
+router.post('/:id/cancel-schedule', campaignController.cancelSchedule);
+
 module.exports = router; 

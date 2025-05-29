@@ -6,6 +6,9 @@ const { validationResult } = require('express-validator');
 exports.getContactLists = async (req, res) => {
   try {
     const { search } = req.query;
+    const { page = 1, limit = 50 } = req.query;
+    const offset = (page - 1) * limit;
+    
     let whereClause = { userId: req.user.id };
     
     // Filter by search term if provided
@@ -19,14 +22,23 @@ exports.getContactLists = async (req, res) => {
       };
     }
 
-    const contactLists = await ContactList.findAll({
+    // Use findAndCountAll to get both the rows and total count
+    const { count, rows: contactLists } = await ContactList.findAndCountAll({
       where: whereClause,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
       order: [['createdAt', 'DESC']]
     });
 
     return res.status(200).json({
       success: true,
-      contactLists
+      contactLists,
+      total: count,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(count / limit)
+      }
     });
   } catch (error) {
     console.error('Get contact lists error:', error);
@@ -336,11 +348,30 @@ exports.addContactsToList = async (req, res) => {
     }
 
     // Add contacts to the list
-    await contactList.addContacts(contacts, { transaction });
+    await contactList.addContacts(contacts, {
+      transaction,
+      through: { 
+        createdAt: new Date(),
+        updatedAt: new Date() 
+      }
+    });
 
-    // Update list count and lastUpdated
+    // Get the actual count of contacts in the list after adding new contacts
+    const currentCount = await Contact.count({
+      include: [
+        {
+          model: ContactList,
+          as: 'lists',
+          where: { id: contactList.id },
+          attributes: []
+        }
+      ],
+      transaction
+    });
+
+    // Update list count with the accurate count from database
     await contactList.update({
-      count: contactList.count + contacts.length,
+      count: currentCount,
       lastUpdated: new Date()
     }, { transaction });
 
@@ -352,7 +383,7 @@ exports.addContactsToList = async (req, res) => {
       contactList: {
         id: contactList.id,
         name: contactList.name,
-        count: contactList.count + contacts.length
+        count: currentCount
       }
     });
   } catch (error) {
@@ -430,9 +461,22 @@ exports.removeContactsFromList = async (req, res) => {
     // Remove contacts from the list
     await contactList.removeContacts(contacts, { transaction });
 
-    // Update list count and lastUpdated
+    // Get the actual count of contacts in the list after removing contacts
+    const currentCount = await Contact.count({
+      include: [
+        {
+          model: ContactList,
+          as: 'lists',
+          where: { id: contactList.id },
+          attributes: []
+        }
+      ],
+      transaction
+    });
+
+    // Update list count with the accurate count from database
     await contactList.update({
-      count: Math.max(0, contactList.count - contacts.length),
+      count: currentCount,
       lastUpdated: new Date()
     }, { transaction });
 
@@ -444,7 +488,7 @@ exports.removeContactsFromList = async (req, res) => {
       contactList: {
         id: contactList.id,
         name: contactList.name,
-        count: Math.max(0, contactList.count - contacts.length)
+        count: currentCount
       }
     });
   } catch (error) {
@@ -456,4 +500,4 @@ exports.removeContactsFromList = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-}; 
+};

@@ -1,11 +1,15 @@
 const { Template, Campaign } = require('../models');
 const { Op } = require('sequelize');
 const { validationResult } = require('express-validator');
+const { processTemplateContent } = require('../middleware/template.middleware');
 
 // Get all templates
 exports.getTemplates = async (req, res) => {
   try {
     const { search, category } = req.query;
+    const { page = 1, limit = 50 } = req.query;
+    const offset = (page - 1) * limit;
+    
     let whereClause = { userId: req.user.id };
     
     // Filter by search term if provided
@@ -24,14 +28,23 @@ exports.getTemplates = async (req, res) => {
       whereClause.category = category;
     }
 
-    const templates = await Template.findAll({
+    // Use findAndCountAll to get both the rows and total count
+    const { count, rows: templates } = await Template.findAndCountAll({
       where: whereClause,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
       order: [['createdAt', 'DESC']]
     });
 
     return res.status(200).json({
       success: true,
-      templates
+      templates,
+      total: count,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(count / limit)
+      }
     });
   } catch (error) {
     console.error('Get templates error:', error);
@@ -203,4 +216,64 @@ exports.deleteTemplate = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
-}; 
+};
+
+// Preview template with contact data
+exports.previewTemplate = async (req, res) => {
+  try {
+    const template = await Template.findOne({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        message: 'Template not found'
+      });
+    }
+
+    // Sample contact data for preview
+    const sampleContact = {
+      firstName: 'John',
+      lastName: 'Doe',
+      email: 'john.doe@example.com',
+      company: 'Example Corp'
+    };
+
+    const processedContent = processTemplateContent(template.content, sampleContact);
+    const processedSubject = processTemplateContent(template.subject, sampleContact);
+
+    return res.status(200).json({
+      success: true,
+      preview: {
+        subject: processedSubject,
+        content: processedContent
+      }
+    });
+  } catch (error) {
+    console.error('Preview template error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error previewing template',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Increment template usage count
+exports.incrementUsage = async (templateId) => {
+  try {
+    const template = await Template.findByPk(templateId);
+    if (template) {
+      await template.update({
+        usageCount: template.usageCount + 1,
+        lastUsed: new Date()
+      });
+    }
+  } catch (error) {
+    console.error('Increment template usage error:', error);
+  }
+};

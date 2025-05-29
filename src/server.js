@@ -11,6 +11,7 @@ const templateRoutes = require('./routes/template.routes');
 const contactRoutes = require('./routes/contact.routes');
 const contactListRoutes = require('./routes/contactList.routes');
 const statsRoutes = require('./routes/stats.routes');
+const validationRoutes = require('./routes/validation');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -28,6 +29,7 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/contact-lists', contactListRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/validate', validationRoutes);
 
 // Error handler middleware
 app.use((err, req, res, next) => {
@@ -50,4 +52,4 @@ app.listen(PORT, async () => {
   }
 });
 
-module.exports = app; 
+module.exports = app;

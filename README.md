@@ -1,6 +1,108 @@
-# Launch Email Campaign API
+# GPM Launch - Email Campaign Server
 
-This is the backend API for the Launch Email Campaign Management System. It provides endpoints to manage campaigns, templates, contacts, and contact lists.
+This is the backend API server for GPM Launch email campaign management platform. The system uses Node.js for the main API and Cloudflare Workers with Durable Objects for the scalable email sending functionality.
+
+## Architecture Overview
+
+The system consists of two main components:
+
+1. **Node.js API Server**: Handles authentication, data storage, and business logic
+2. **Cloudflare Workers**: Processes email campaigns asynchronously for maximum scalability
+
+### Email Campaign Processing Flow
+
+1. Campaign is created in the main database via Node.js API
+2. When a campaign is scheduled or sent immediately, the API initializes a new Durable Object instance in Cloudflare
+3. The Cloudflare Worker processes the email sending in batches using its Durable Object for state management
+4. Campaign progress and statistics are tracked in KV storage
+5. Opens and clicks are tracked with special tracking pixels and URLs
+
+## Setup Instructions
+
+### 1. Cloudflare Workers Setup
+
+#### Prerequisites
+
+- A Cloudflare account
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) installed
+
+#### Create KV Namespace
+
+```bash
+# Login to Cloudflare
+wrangler login
+
+# Create KV namespace for email tracking
+wrangler kv:namespace create EMAIL_TRACKING
+wrangler kv:namespace create EMAIL_TRACKING --preview
+```
+
+Update the `wrangler.toml` file with the generated KV namespace IDs.
+
+#### Deploy the Worker
+
+```bash
+# Deploy to Cloudflare
+cd server
+wrangler publish
+```
+
+#### Verify the Deployment
+
+Once deployed, you should be able to access your worker at:
+`https://gpm-email-worker.<your-account>.workers.dev`
+
+### 2. API Server Configuration
+
+The Node.js API server needs to be configured to communicate with the Cloudflare Worker. Add these environment variables to your `.env` file:
+
+```
+# Cloudflare Worker
+WORKER_URL=https://gpm-email-worker.<your-account>.workers.dev
+WORKER_API_KEY=<generate-a-secure-api-key>
+```
+
+## Usage
+
+### Sending Email Campaigns
+
+When a campaign is ready to be sent, the API orchestrates the process:
+
+1. The campaign data is loaded from the database including the recipient list and template
+2. A request is sent to the Cloudflare Worker to initialize the campaign
+3. Another request starts the processing
+4. The API can poll the worker for status updates
+
+### Tracking Campaign Metrics
+
+- Open tracking: Uses a 1x1 transparent pixel in the email
+- Click tracking: Rewrites links to pass through the tracking server
+- All metrics are stored in Cloudflare KV for fast access
+
+## Development
+
+### Testing Locally
+
+You can test the worker locally using Wrangler:
+
+```bash
+cd server
+wrangler dev
+```
+
+### Debugging
+
+For debugging worker issues:
+
+1. Check the Cloudflare Workers dashboard for logs
+2. Enable verbose logging in wrangler.toml
+3. Test API endpoints with Postman or similar tools
+
+## Security Considerations
+
+- Worker API Key: The WORKER_API_KEY should be kept secret
+- Rate Limiting: Configure rate limits in wrangler.toml to prevent abuse
+- User Data: Ensure compliance with privacy regulations like GDPR when storing email data
 
 ## Technology Stack
 
