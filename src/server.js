@@ -13,6 +13,9 @@ const contactListRoutes = require('./routes/contactList.routes');
 const statsRoutes = require('./routes/stats.routes');
 const validationRoutes = require('./routes/validation');
 
+// Import middleware
+const corsMiddleware = require('./middleware/cors.middleware');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -23,8 +26,18 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
+
+// Handle OPTIONS preflight requests
+app.options('*', cors({
+  origin: ['https://launch.gravitypointmedia.com'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(corsMiddleware);
 
 // Routes
 app.use('/api/auth', authRoutes);
