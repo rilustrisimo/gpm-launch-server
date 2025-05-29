@@ -3,11 +3,8 @@ main = "workers/emailWorker.js"
 compatibility_date = "2023-10-30"
 compatibility_flags = ["durable_object_alarms"]
 
-# Custom domain configuration
+# Just enable workers_dev, remove route configuration
 workers_dev = true
-routes = [
-  "worker.gravitypointmedia.com/*"
-]
 
 [triggers]
 crons = []
