@@ -33,7 +33,7 @@ class EmailService {
    */
   addUnsubscribeLink(html, email, campaignId) {
     const token = this.generateUnsubscribeToken(email, campaignId);
-    const unsubscribeUrl = `${process.env.TRACKING_URL}/unsubscribe/${token}?email=${encodeURIComponent(email)}`;
+    const unsubscribeUrl = `${process.env.WORKER_URL}/unsubscribe/${token}?email=${encodeURIComponent(email)}&campaignId=${encodeURIComponent(campaignId)}`;
     
     const unsubscribeHtml = `
       <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
@@ -52,22 +52,16 @@ class EmailService {
    * @param {string} options.html - HTML content
    * @param {string} options.text - Plain text content
    * @param {string} options.from - Sender email
-   * @param {string} options.trackingId - Unique tracking ID for this email
-   * @param {string} options.campaignId - Campaign ID for unsubscribe functionality
+   * @param {string} options.campaignId - Campaign ID for tracking
+   * @param {string} options.contactId - Contact ID for tracking
    * @returns {Promise<Object>} - SES send result
    */
-  async sendEmail({ to, subject, html, text, from, trackingId, campaignId }) {
+  async sendEmail({ to, subject, html, text, from, campaignId, contactId }) {
     try {
-      // Add tracking pixel to HTML content
-      const trackingPixel = `<img src="${process.env.TRACKING_URL}/track/open/${trackingId}" width="1" height="1" alt="" />`;
-      let enhancedHtml = html + trackingPixel;
+      // Add unsubscribe link with token - still needed for custom unsubscribe handling
+      const enhancedHtml = this.addUnsubscribeLink(html, to, campaignId);
 
-      // Add unsubscribe link
-      enhancedHtml = this.addUnsubscribeLink(enhancedHtml, to, campaignId);
-
-      // Convert links to tracking links
-      const enhancedHtmlWithTracking = this.addClickTracking(enhancedHtml, trackingId);
-
+      // Create the message with AWS SES
       const params = {
         Source: from,
         Destination: {
@@ -80,16 +74,28 @@ class EmailService {
           },
           Body: {
             Html: {
-              Data: enhancedHtmlWithTracking,
+              Data: enhancedHtml,
               Charset: 'UTF-8'
             },
             Text: {
-              Data: text || this.stripHtml(enhancedHtmlWithTracking),
+              Data: text || this.stripHtml(enhancedHtml),
               Charset: 'UTF-8'
             }
           }
         },
-        ConfigurationSetName: process.env.AWS_SES_CONFIGURATION_SET
+        // Configuration set must be set up in AWS SES with event publishing enabled
+        ConfigurationSetName: process.env.AWS_SES_CONFIGURATION_SET,
+        // Add tags for tracking which campaign and contact this email is associated with
+        Tags: [
+          {
+            Name: 'campaignId',
+            Value: campaignId || 'unknown'
+          },
+          {
+            Name: 'contactId',
+            Value: contactId || 'unknown'
+          }
+        ]
       };
 
       const result = await this.ses.sendEmail(params).promise();
@@ -98,26 +104,6 @@ class EmailService {
       console.error('SES send error:', error);
       throw createError('Failed to send email', 500, error);
     }
-  }
-
-  /**
-   * Add click tracking to all links in HTML content
-   * @param {string} html - Original HTML content
-   * @param {string} trackingId - Unique tracking ID
-   * @returns {string} - HTML with tracking links
-   */
-  addClickTracking(html, trackingId) {
-    return html.replace(
-      /<a\s+(?:[^>]*?\s+)?href="([^"]*)"([^>]*)>/g,
-      (match, url, attributes) => {
-        // Don't track unsubscribe links
-        if (url.includes('/unsubscribe/')) {
-          return match;
-        }
-        const trackingUrl = `${process.env.TRACKING_URL}/track/click/${trackingId}?url=${encodeURIComponent(url)}`;
-        return `<a href="${trackingUrl}"${attributes}>`;
-      }
-    );
   }
 
   /**
@@ -162,4 +148,4 @@ class EmailService {
   }
 }
 
-module.exports = new EmailService(); 
+module.exports = new EmailService();

@@ -12,6 +12,7 @@ const contactRoutes = require('./routes/contact.routes');
 const contactListRoutes = require('./routes/contactList.routes');
 const statsRoutes = require('./routes/stats.routes');
 const validationRoutes = require('./routes/validation');
+const trackingRoutes = require('./routes/tracking.routes'); // Add tracking routes
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -38,6 +39,7 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/contact-lists', contactListRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/validate', validationRoutes);
+app.use('/api/tracking', trackingRoutes); // Add tracking routes
 
 // Health check endpoint
 app.get('/health', (req, res) => {

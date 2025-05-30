@@ -76,4 +76,39 @@ exports.admin = (req, res, next) => {
       message: 'Access denied. Admin permission required.'
     });
   }
-}; 
+};
+
+/**
+ * Middleware to validate API key for worker-to-server communication
+ * This is used for the tracking API endpoints that receive data from the worker
+ */
+exports.validateApiKey = (req, res, next) => {
+  try {
+    // Get API key from header
+    const authHeader = req.header('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. No API key provided or invalid format.'
+      });
+    }
+
+    const apiKey = authHeader.split(' ')[1];
+
+    // Validate API key against environment variable
+    if (apiKey !== process.env.WORKER_API_KEY) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid API key.'
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('API key validation error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during authentication.'
+    });
+  }
+};

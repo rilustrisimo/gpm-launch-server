@@ -172,12 +172,12 @@ class CampaignService {
    * Filter out unsubscribed contacts
    */
   async filterUnsubscribedContacts(contacts) {
-    const workerUrl = process.env.WORKER_URL || 'https://gpm-email-worker.gravitypointmedia.com';
+    const workerUrl = process.env.WORKER_URL || 'https://worker.gravitypointmedia.com';
     const activeContacts = [];
 
     for (const contact of contacts) {
       try {
-        const response = await fetch(`${workerUrl}/unsubscribe-status/${contact.email}`, {
+        const response = await fetch(`${workerUrl}/api/unsubscribe-status/${contact.email}`, {
           headers: {
             'Authorization': `Bearer ${process.env.WORKER_API_KEY}`
           }
@@ -256,9 +256,9 @@ class CampaignService {
   
   // Initialize a campaign in the worker
   async initializeWorkerCampaign(campaignId, campaignData) {
-    const workerUrl = process.env.WORKER_URL || 'https://gpm-email-worker.gravitypointmedia.com';
+    const workerUrl = process.env.WORKER_URL || 'https://worker.gravitypointmedia.com';
     
-    return fetch(`${workerUrl}/campaign/${campaignId}/initialize`, {
+    return fetch(`${workerUrl}/api/campaign/${campaignId}/initialize`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -270,9 +270,9 @@ class CampaignService {
   
   // Start processing a campaign
   async startWorkerCampaign(campaignId) {
-    const workerUrl = process.env.WORKER_URL || 'https://gpm-email-worker.gravitypointmedia.com';
+    const workerUrl = process.env.WORKER_URL || 'https://worker.gravitypointmedia.com';
     
-    return fetch(`${workerUrl}/campaign/${campaignId}/start`, {
+    return fetch(`${workerUrl}/api/campaign/${campaignId}/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -283,9 +283,9 @@ class CampaignService {
   
   // Get campaign status from worker
   async getWorkerCampaignStatus(campaignId) {
-    const workerUrl = process.env.WORKER_URL || 'https://gpm-email-worker.gravitypointmedia.com';
+    const workerUrl = process.env.WORKER_URL || 'https://worker.gravitypointmedia.com';
     
-    return fetch(`${workerUrl}/campaign/${campaignId}/status`, {
+    return fetch(`${workerUrl}/api/campaign/${campaignId}/status`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${process.env.WORKER_API_KEY}`
