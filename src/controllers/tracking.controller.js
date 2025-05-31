@@ -12,23 +12,35 @@ const { createError } = require('../utils/error');
  */
 async function updateTracking(req, res, next) {
   try {
+    console.log('📊 Received tracking update:');
+    console.log(`- Body: ${JSON.stringify(req.body)}`);
+    
     const { campaignId, contactId, trackingData } = req.body;
     
     if (!campaignId || !contactId || !trackingData) {
+      console.log('❌ Missing required parameters');
       return next(createError('Missing required parameters', 400));
     }
+    
+    console.log(`- Campaign ID: ${campaignId}`);
+    console.log(`- Contact ID: ${contactId}`);
+    console.log(`- Event Type: ${trackingData.type}`);
     
     // Find the campaign
     const campaign = await Campaign.findByPk(campaignId);
     if (!campaign) {
+      console.log('❌ Campaign not found');
       return next(createError('Campaign not found', 404));
     }
     
     // Find the contact
     const contact = await Contact.findByPk(contactId);
     if (!contact) {
+      console.log('❌ Contact not found');
       return next(createError('Contact not found', 404));
     }
+    
+    console.log('✅ Found campaign and contact')
     
     // Update campaign statistics based on tracking event type
     switch (trackingData.type) {

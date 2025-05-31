@@ -84,9 +84,15 @@ exports.admin = (req, res, next) => {
  */
 exports.validateApiKey = (req, res, next) => {
   try {
+    console.log('Tracking API request received:');
+    console.log(`- Path: ${req.path}`);
+    console.log(`- Method: ${req.method}`);
+    console.log(`- Headers: ${JSON.stringify(req.headers)}`);
+    
     // Get API key from header
     const authHeader = req.header('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('❌ Auth header missing or invalid format');
       return res.status(401).json({
         success: false,
         message: 'Access denied. No API key provided or invalid format.'
@@ -94,15 +100,19 @@ exports.validateApiKey = (req, res, next) => {
     }
 
     const apiKey = authHeader.split(' ')[1];
+    console.log(`- Received API key: ${apiKey.substring(0, 5)}...${apiKey.substring(apiKey.length - 5)}`);
+    console.log(`- Expected API key: ${process.env.WORKER_API_KEY.substring(0, 5)}...${process.env.WORKER_API_KEY.substring(process.env.WORKER_API_KEY.length - 5)}`);
 
     // Validate API key against environment variable
     if (apiKey !== process.env.WORKER_API_KEY) {
+      console.log('❌ API key validation failed');
       return res.status(401).json({
         success: false,
         message: 'Invalid API key.'
       });
     }
-
+    
+    console.log('✅ API key validation successful');
     next();
   } catch (error) {
     console.error('API key validation error:', error);
