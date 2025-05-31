@@ -39,7 +39,10 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/contact-lists', contactListRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/validate', validationRoutes);
-app.use('/api/tracking', trackingRoutes); // Add tracking routes
+
+// Tracking routes with worker API key authentication
+// These should NOT use the regular JWT auth middleware
+app.use('/api/tracking', trackingRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -48,12 +51,27 @@ app.get('/health', (req, res) => {
 
 // Error handler middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
+  console.error('Server error:', err);
+  
+  // Determine status code based on error
+  const statusCode = err.statusCode || 500;
+  
+  // Create detailed error response
+  const errorResponse = {
     success: false,
-    message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
+    message: err.message || 'Internal server error',
+    path: req.path,
+    method: req.method
+  };
+  
+  // Add additional details in development environment
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.error = err.message;
+    errorResponse.stack = err.stack;
+    errorResponse.details = err.details;
+  }
+  
+  res.status(statusCode).json(errorResponse);
 });
 
 // Database connection and server start

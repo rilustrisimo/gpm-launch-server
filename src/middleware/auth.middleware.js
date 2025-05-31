@@ -84,12 +84,12 @@ exports.admin = (req, res, next) => {
  */
 exports.validateApiKey = (req, res, next) => {
   try {
-    console.log('Tracking API request received:');
+    console.log('🔑 Tracking API request received:');
     console.log(`- Path: ${req.path}`);
     console.log(`- Method: ${req.method}`);
-    console.log(`- Headers: ${JSON.stringify(req.headers)}`);
     
-    // Get API key from header
+    // IMPORTANT: Don't log all headers as they might contain sensitive info
+    // Just log necessary parts for debugging
     const authHeader = req.header('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       console.log('❌ Auth header missing or invalid format');
@@ -100,10 +100,30 @@ exports.validateApiKey = (req, res, next) => {
     }
 
     const apiKey = authHeader.split(' ')[1];
-    console.log(`- Received API key: ${apiKey.substring(0, 5)}...${apiKey.substring(apiKey.length - 5)}`);
-    console.log(`- Expected API key: ${process.env.WORKER_API_KEY.substring(0, 5)}...${process.env.WORKER_API_KEY.substring(process.env.WORKER_API_KEY.length - 5)}`);
+    
+    // Only log portions of the keys for security
+    if (apiKey && apiKey.length > 10) {
+      console.log(`- Received API key: ${apiKey.substring(0, 5)}...${apiKey.substring(apiKey.length - 5)}`);
+    } else {
+      console.log(`- Received API key: [INVALID FORMAT]`);
+    }
+    
+    if (process.env.WORKER_API_KEY && process.env.WORKER_API_KEY.length > 10) {
+      console.log(`- Expected API key: ${process.env.WORKER_API_KEY.substring(0, 5)}...${process.env.WORKER_API_KEY.substring(process.env.WORKER_API_KEY.length - 5)}`);
+    } else {
+      console.log(`- Expected API key: [NOT PROPERLY SET]`);
+      console.log(`- Check environment variable WORKER_API_KEY in server configuration`);
+    }
 
     // Validate API key against environment variable
+    if (!process.env.WORKER_API_KEY) {
+      console.error('❌ WORKER_API_KEY environment variable is not set');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error: API key not set'
+      });
+    }
+    
     if (apiKey !== process.env.WORKER_API_KEY) {
       console.log('❌ API key validation failed');
       return res.status(401).json({
