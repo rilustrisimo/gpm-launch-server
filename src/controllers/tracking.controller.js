@@ -4,19 +4,7 @@
  * Handles tracking data updates from the Cloudflare Worker
  */
 
-const { Campaign, Co    console.log(`Successfully recorded complaint for contact: ${contact.id} (${email})`);
-    
-    // Return success
-    res.status(200).json({ 
-      success: true,
-      contactExists: true,
-      contactId: contact.id
-    });
-  } catch (error) {
-    console.error(`Error in recordComplaint: ${error.message}`);
-    next(createError('Failed to update complaint status', 500, error));
-  }
-}} = require('../models');
+const { Campaign, Contact } = require('../models');
 const { createError } = require('../utils/error');
 
 /**
