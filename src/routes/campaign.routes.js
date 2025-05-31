@@ -21,10 +21,10 @@ router.get('/:id/stats', campaignController.getCampaignStats);
 router.post(
   '/',
   [
-    body('name', 'Campaign name is required').notEmpty(),
-    body('subject', 'Subject line is required').notEmpty(),
-    body('templateId', 'Template ID is required').notEmpty(),
-    body('contactListId', 'Contact list ID is required').notEmpty(),
+    body('name', 'Campaign name is required').notEmpty().trim(),
+    body('subject', 'Subject line is required').notEmpty().trim(),
+    body('templateId', 'Template ID is required').notEmpty().isUUID().withMessage('Invalid Template ID format'),
+    body('contactListId', 'Contact list ID is required').notEmpty().isUUID().withMessage('Invalid Contact List ID format'),
     body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
   ],
   campaignController.createCampaign
@@ -34,10 +34,10 @@ router.post(
 router.put(
   '/:id',
   [
-    body('name').optional(),
-    body('subject').optional(),
-    body('templateId').optional(),
-    body('contactListId').optional(),
+    body('name').optional().trim(),
+    body('subject').optional().trim(),
+    body('templateId').optional().isUUID().withMessage('Invalid Template ID format'),
+    body('contactListId').optional().isUUID().withMessage('Invalid Contact List ID format'),
     body('status').optional().isIn(['draft', 'scheduled', 'sending', 'completed']).withMessage('Invalid status value'),
     body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
   ],
@@ -53,4 +53,4 @@ router.post('/:id/schedule', campaignController.scheduleCampaign);
 // Cancel a scheduled campaign
 router.post('/:id/cancel-schedule', campaignController.cancelSchedule);
 
-module.exports = router; 
+module.exports = router;
