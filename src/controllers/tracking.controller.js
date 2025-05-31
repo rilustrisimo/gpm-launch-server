@@ -4,7 +4,19 @@
  * Handles tracking data updates from the Cloudflare Worker
  */
 
-const { Campaign, Contact } = require('../models');
+const { Campaign, Co    console.log(`Successfully recorded complaint for contact: ${contact.id} (${email})`);
+    
+    // Return success
+    res.status(200).json({ 
+      success: true,
+      contactExists: true,
+      contactId: contact.id
+    });
+  } catch (error) {
+    console.error(`Error in recordComplaint: ${error.message}`);
+    next(createError('Failed to update complaint status', 500, error));
+  }
+}} = require('../models');
 const { createError } = require('../utils/error');
 
 /**
@@ -132,10 +144,20 @@ async function recordBounce(req, res, next) {
       return next(createError('Email is required', 400));
     }
     
+    console.log(`Processing bounce for email: ${email}, type: ${bounceType || 'unknown'}`);
+    
     // Find the contact by email
     const contact = await Contact.findOne({ where: { email: email.toLowerCase() } });
+    
+    // If contact doesn't exist, log this but return a successful response
+    // This prevents the worker from retrying and overwhelming the server
     if (!contact) {
-      return next(createError('Contact not found', 404));
+      console.log(`Bounce received for non-existent contact: ${email}`);
+      return res.status(200).json({ 
+        success: true, 
+        warning: 'Contact not found in database, but bounce recorded in logs',
+        contactExists: false
+      });
     }
     
     // Update the bounce status
@@ -145,9 +167,16 @@ async function recordBounce(req, res, next) {
       lastBouncedAt: timestamp || new Date()
     });
     
+    console.log(`Successfully recorded bounce for contact: ${contact.id} (${email})`);
+    
     // Return success
-    res.status(200).json({ success: true });
+    res.status(200).json({ 
+      success: true,
+      contactExists: true,
+      contactId: contact.id
+    });
   } catch (error) {
+    console.error(`Error in recordBounce: ${error.message}`);
     next(createError('Failed to record bounce event', 500, error));
   }
 }
@@ -163,10 +192,20 @@ async function recordComplaint(req, res, next) {
       return next(createError('Email is required', 400));
     }
     
+    console.log(`Processing complaint for email: ${email}, type: ${complaintType || 'unknown'}`);
+    
     // Find the contact by email
     const contact = await Contact.findOne({ where: { email: email.toLowerCase() } });
+    
+    // If contact doesn't exist, log this but return a successful response
+    // This prevents the worker from retrying and overwhelming the server
     if (!contact) {
-      return next(createError('Contact not found', 404));
+      console.log(`Complaint received for non-existent contact: ${email}`);
+      return res.status(200).json({ 
+        success: true, 
+        warning: 'Contact not found in database, but complaint recorded in logs',
+        contactExists: false
+      });
     }
     
     // Update the complaint status and also mark as unsubscribed
@@ -178,9 +217,16 @@ async function recordComplaint(req, res, next) {
       unsubscribedAt: timestamp || new Date()
     });
     
+    console.log(`Successfully recorded complaint for contact: ${contact.id} (${email})`);
+    
     // Return success
-    res.status(200).json({ success: true });
+    res.status(200).json({ 
+      success: true,
+      contactExists: true,
+      contactId: contact.id
+    });
   } catch (error) {
+    console.error(`Error in recordComplaint: ${error.message}`);
     next(createError('Failed to record complaint event', 500, error));
   }
 }
