@@ -2,6 +2,20 @@ const { Campaign, Template, ContactList, CampaignStat, Contact, User, sequelize 
 const { Op } = require('sequelize');
 const { validationResult } = require('express-validator');
 const schedulerService = require('../services/schedulerService');
+const axios = require('axios');
+
+// Worker configuration
+const WORKER_URL = process.env.WORKER_URL || 'https://worker.gravitypointmedia.com';
+const WORKER_API_KEY = process.env.WORKER_API_KEY;
+
+// Helper function to make authenticated requests to the worker
+const workerClient = axios.create({
+  baseURL: WORKER_URL,
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${WORKER_API_KEY}`
+  }
+});
 
 // Get all campaigns
 exports.getCampaigns = async (req, res) => {
@@ -89,6 +103,22 @@ exports.getCampaign = async (req, res) => {
         success: false,
         message: 'Campaign not found'
       });
+    }
+
+    // If campaign is active or completed, fetch real-time stats from the worker
+    if (['processing', 'sending', 'completed'].includes(campaign.status)) {
+      try {
+        const workerResponse = await workerClient.get(`/campaigns/${campaign.id}/status`);
+        if (workerResponse.data && workerResponse.data.success) {
+          // Merge worker stats with campaign data
+          campaign.dataValues.workerStats = workerResponse.data.stats;
+          campaign.dataValues.workerStatus = workerResponse.data.status;
+          campaign.dataValues.progress = workerResponse.data.progress;
+        }
+      } catch (workerError) {
+        console.error('Worker stats fetch error:', workerError);
+        // Continue with local data if worker is unavailable
+      }
     }
 
     return res.status(200).json({
@@ -367,7 +397,8 @@ exports.getCampaignStats = async (req, res) => {
       });
     }
 
-    const stats = {
+    // Prepare local stats
+    const localStats = {
       totalRecipients: campaign.totalRecipients,
       sent: campaign.stats.filter(stat => stat.sent).length,
       delivered: campaign.stats.filter(stat => stat.delivered).length,
@@ -378,6 +409,43 @@ exports.getCampaignStats = async (req, res) => {
       clickRate: campaign.clickRate,
     };
 
+    // For active campaigns, fetch the latest stats from the worker
+    if (['processing', 'sending', 'completed'].includes(campaign.status)) {
+      try {
+        const workerResponse = await workerClient.get(`/campaigns/${campaign.id}/status`);
+        
+        if (workerResponse.data && workerResponse.data.success) {
+          // Use worker stats as they're more up-to-date
+          return res.status(200).json({
+            success: true,
+            campaign: {
+              id: campaign.id,
+              name: campaign.name,
+              status: workerResponse.data.status || campaign.status,
+              scheduledFor: campaign.scheduledFor,
+              sentAt: campaign.sentAt,
+              initializedAt: workerResponse.data.stats.initializedAt,
+              startedAt: workerResponse.data.stats.startedAt,
+              completedAt: workerResponse.data.stats.completedAt
+            },
+            stats: {
+              ...localStats,
+              ...workerResponse.data.stats,
+              // Calculate correct percentages
+              openRate: workerResponse.data.stats.openRate || localStats.openRate,
+              clickRate: workerResponse.data.stats.clickRate || localStats.clickRate
+            },
+            progress: workerResponse.data.progress || 0,
+            recipients: campaign.stats // Keep detailed recipient data from database
+          });
+        }
+      } catch (workerError) {
+        console.warn('Could not fetch worker stats, using local data:', workerError.message);
+        // Continue with local data if worker is unavailable
+      }
+    }
+
+    // Return local stats as fallback
     return res.status(200).json({
       success: true,
       campaign: {
@@ -387,7 +455,7 @@ exports.getCampaignStats = async (req, res) => {
         scheduledFor: campaign.scheduledFor,
         sentAt: campaign.sentAt
       },
-      stats,
+      stats: localStats,
       recipients: campaign.stats
     });
   } catch (error) {
@@ -416,7 +484,23 @@ exports.scheduleCampaign = async (req, res) => {
       where: {
         id: req.params.id,
         userId: req.user.id
-      }
+      },
+      include: [
+        {
+          model: Template,
+          as: 'template'
+        },
+        {
+          model: ContactList,
+          as: 'contactList',
+          include: [
+            {
+              model: Contact,
+              attributes: ['id', 'email', 'firstName', 'lastName']
+            }
+          ]
+        }
+      ]
     });
 
     if (!campaign) {
@@ -433,16 +517,58 @@ exports.scheduleCampaign = async (req, res) => {
       });
     }
 
-    // Schedule the campaign
-    const scheduledCampaign = await schedulerService.scheduleCampaign(
-      campaign.id,
-      new Date(scheduledFor)
-    );
+    // 1. Initialize campaign in the worker
+    const campaignData = {
+      id: campaign.id,
+      name: campaign.name,
+      subject: campaign.subject,
+      templateId: campaign.templateId,
+      templateHtml: campaign.template.html,
+      templateText: campaign.template.text,
+      recipients: campaign.contactList.Contacts.map(contact => ({
+        id: contact.id,
+        email: contact.email,
+        firstName: contact.firstName,
+        lastName: contact.lastName
+      }))
+    };
 
-    return res.status(200).json({
-      success: true,
-      campaign: scheduledCampaign
-    });
+    try {
+      // Initialize the campaign in the worker
+      const initResponse = await workerClient.post(`/campaigns/${campaign.id}/initialize`, campaignData);
+      
+      if (!initResponse.data.success) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to initialize campaign in worker',
+          error: initResponse.data.message
+        });
+      }
+
+      // 2. Schedule the campaign in the database
+      const scheduledCampaign = await schedulerService.scheduleCampaign(
+        campaign.id,
+        new Date(scheduledFor)
+      );
+
+      // 3. Add to the worker's scheduler
+      await workerClient.put(`/scheduled_campaign:${campaign.id}`, {
+        scheduledFor: new Date(scheduledFor).toISOString()
+      });
+
+      return res.status(200).json({
+        success: true,
+        campaign: scheduledCampaign,
+        workerStatus: initResponse.data
+      });
+    } catch (workerError) {
+      console.error('Worker initialization error:', workerError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error initializing campaign in worker',
+        error: process.env.NODE_ENV === 'development' ? workerError.message : undefined
+      });
+    }
   } catch (error) {
     console.error('Schedule campaign error:', error);
     return res.status(500).json({
@@ -477,18 +603,147 @@ exports.cancelSchedule = async (req, res) => {
       });
     }
 
-    // Cancel the scheduled campaign
-    const cancelledCampaign = await schedulerService.cancelScheduledCampaign(campaign.id);
+    try {
+      // Remove from worker's scheduler
+      await workerClient.delete(`/scheduled_campaign:${campaign.id}`);
+      
+      // Cancel in the database
+      const cancelledCampaign = await schedulerService.cancelScheduledCampaign(campaign.id);
 
-    return res.status(200).json({
-      success: true,
-      campaign: cancelledCampaign
-    });
+      return res.status(200).json({
+        success: true,
+        campaign: cancelledCampaign
+      });
+    } catch (workerError) {
+      console.warn('Worker cancel error (continuing with local cancel):', workerError);
+      // Continue with local cancellation if worker is unavailable
+      const cancelledCampaign = await schedulerService.cancelScheduledCampaign(campaign.id);
+      
+      return res.status(200).json({
+        success: true,
+        campaign: cancelledCampaign,
+        workerWarning: 'Campaign canceled in database, but worker notification failed'
+      });
+    }
   } catch (error) {
     console.error('Cancel schedule error:', error);
     return res.status(500).json({
       success: false,
       message: 'Error cancelling scheduled campaign',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Send campaign immediately
+exports.sendCampaignNow = async (req, res) => {
+  try {
+    const campaign = await Campaign.findOne({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      },
+      include: [
+        {
+          model: Template,
+          as: 'template'
+        },
+        {
+          model: ContactList,
+          as: 'contactList',
+          include: [
+            {
+              model: Contact,
+              attributes: ['id', 'email', 'firstName', 'lastName']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found or access denied'
+      });
+    }
+
+    if (!['draft', 'scheduled'].includes(campaign.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Only draft or scheduled campaigns can be sent immediately'
+      });
+    }
+
+    // Prepare campaign data for the worker
+    const campaignData = {
+      id: campaign.id,
+      name: campaign.name,
+      subject: campaign.subject,
+      templateId: campaign.templateId,
+      templateHtml: campaign.template.html,
+      templateText: campaign.template.text,
+      recipients: campaign.contactList.Contacts.map(contact => ({
+        id: contact.id,
+        email: contact.email,
+        firstName: contact.firstName,
+        lastName: contact.lastName
+      }))
+    };
+
+    try {
+      // 1. Initialize the campaign in the worker
+      const initResponse = await workerClient.post(`/campaigns/${campaign.id}/initialize`, campaignData);
+      
+      if (!initResponse.data.success) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to initialize campaign in worker',
+          error: initResponse.data.message
+        });
+      }
+
+      // 2. Start the campaign processing
+      const startResponse = await workerClient.post(`/campaigns/${campaign.id}/start`);
+      
+      if (!startResponse.data.success) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to start campaign processing in worker',
+          error: startResponse.data.message
+        });
+      }
+
+      // Update campaign status in database
+      await campaign.update({
+        status: 'sending',
+        sentAt: new Date()
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Campaign sending started successfully',
+        campaign: {
+          id: campaign.id,
+          name: campaign.name,
+          status: 'sending',
+          sentAt: campaign.sentAt
+        },
+        workerStatus: startResponse.data
+      });
+    } catch (workerError) {
+      console.error('Worker send error:', workerError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error sending campaign through worker',
+        error: process.env.NODE_ENV === 'development' ? workerError.message : undefined
+      });
+    }
+  } catch (error) {
+    console.error('Send campaign error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error sending campaign',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

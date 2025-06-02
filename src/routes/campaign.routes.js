@@ -53,4 +53,7 @@ router.post('/:id/schedule', campaignController.scheduleCampaign);
 // Cancel a scheduled campaign
 router.post('/:id/cancel-schedule', campaignController.cancelSchedule);
 
+// Send campaign immediately
+router.post('/:id/send-now', campaignController.sendCampaignNow);
+
 module.exports = router;
