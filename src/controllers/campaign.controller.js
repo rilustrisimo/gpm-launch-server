@@ -496,6 +496,7 @@ exports.scheduleCampaign = async (req, res) => {
           include: [
             {
               model: Contact,
+              as: 'contacts',
               attributes: ['id', 'email', 'firstName', 'lastName']
             }
           ]
@@ -525,7 +526,7 @@ exports.scheduleCampaign = async (req, res) => {
       templateId: campaign.templateId,
       templateHtml: campaign.template.html,
       templateText: campaign.template.text,
-      recipients: campaign.contactList.Contacts.map(contact => ({
+      recipients: campaign.contactList.contacts.map(contact => ({
         id: contact.id,
         email: contact.email,
         firstName: contact.firstName,
@@ -654,6 +655,7 @@ exports.sendCampaignNow = async (req, res) => {
           include: [
             {
               model: Contact,
+              as: 'contacts',
               attributes: ['id', 'email', 'firstName', 'lastName']
             }
           ]
@@ -683,7 +685,7 @@ exports.sendCampaignNow = async (req, res) => {
       templateId: campaign.templateId,
       templateHtml: campaign.template.html,
       templateText: campaign.template.text,
-      recipients: campaign.contactList.Contacts.map(contact => ({
+      recipients: campaign.contactList.contacts.map(contact => ({
         id: contact.id,
         email: contact.email,
         firstName: contact.firstName,
