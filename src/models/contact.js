@@ -45,6 +45,45 @@ module.exports = (sequelize, DataTypes) => {
     },
     lastEngagement: {
       type: DataTypes.DATE
+    },
+    lastOpened: {
+      type: DataTypes.DATE
+    },
+    lastClicked: {
+      type: DataTypes.DATE
+    },
+    lastClickedLink: {
+      type: DataTypes.TEXT
+    },
+    lastDelivered: {
+      type: DataTypes.DATE
+    },
+    unsubscribed: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    unsubscribedAt: {
+      type: DataTypes.DATE
+    },
+    hasBounced: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    bounceType: {
+      type: DataTypes.STRING
+    },
+    lastBouncedAt: {
+      type: DataTypes.DATE
+    },
+    hasComplained: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    complaintType: {
+      type: DataTypes.STRING
+    },
+    lastComplainedAt: {
+      type: DataTypes.DATE
     }
   }, {
     sequelize,

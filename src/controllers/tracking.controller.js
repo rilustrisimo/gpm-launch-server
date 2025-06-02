@@ -155,6 +155,25 @@ async function recordBounce(req, res, next) {
       lastBouncedAt: timestamp || new Date()
     });
     
+    // If messageId contains campaignId, update the campaign bounce counter
+    if (messageId && messageId.includes('-campaign-')) {
+      try {
+        // Extract campaignId from messageId (format depends on how your system formats messageIds)
+        const campaignIdMatch = messageId.match(/campaign-([a-f0-9\-]+)/i);
+        if (campaignIdMatch && campaignIdMatch[1]) {
+          const campaignId = campaignIdMatch[1];
+          const campaign = await Campaign.findByPk(campaignId);
+          if (campaign) {
+            await campaign.increment('bounces');
+            console.log(`Incremented bounce count for campaign: ${campaignId}`);
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to update campaign bounce count: ${err.message}`);
+        // Don't fail the whole request if this fails
+      }
+    }
+    
     console.log(`Successfully recorded bounce for contact: ${contact.id} (${email})`);
     
     // Return success
@@ -204,6 +223,25 @@ async function recordComplaint(req, res, next) {
       unsubscribed: true,
       unsubscribedAt: timestamp || new Date()
     });
+    
+    // If messageId contains campaignId, update the campaign complaints counter
+    if (messageId && messageId.includes('-campaign-')) {
+      try {
+        // Extract campaignId from messageId (format depends on how your system formats messageIds)
+        const campaignIdMatch = messageId.match(/campaign-([a-f0-9\-]+)/i);
+        if (campaignIdMatch && campaignIdMatch[1]) {
+          const campaignId = campaignIdMatch[1];
+          const campaign = await Campaign.findByPk(campaignId);
+          if (campaign) {
+            await campaign.increment('complaints');
+            console.log(`Incremented complaint count for campaign: ${campaignId}`);
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to update campaign complaint count: ${err.message}`);
+        // Don't fail the whole request if this fails
+      }
+    }
     
     console.log(`Successfully recorded complaint for contact: ${contact.id} (${email})`);
     

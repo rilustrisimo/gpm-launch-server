@@ -706,8 +706,23 @@ exports.sendCampaignNow = async (req, res) => {
     };
 
     try {
+      // Debug log to check what we're sending to the worker
+      console.log('Worker initialization request:', {
+        url: `${WORKER_URL}/api/campaigns/${campaign.id}/initialize`,
+        headers: workerClient.defaults.headers,
+        data: campaignData
+      });
+      
       // 1. Initialize the campaign in the worker
-      const initResponse = await workerClient.post(`/campaigns/${campaign.id}/initialize`, campaignData);
+      const initResponse = await workerClient.post(`/api/campaigns/${campaign.id}/initialize`, campaignData);
+      
+      // Debug log for worker response
+      console.log('Worker initialization response:', {
+        status: initResponse.status,
+        statusText: initResponse.statusText,
+        headers: initResponse.headers,
+        data: initResponse.data
+      });
       
       if (!initResponse.data || !initResponse.data.success) {
         console.error('Worker initialization error:', initResponse.status, initResponse.data);

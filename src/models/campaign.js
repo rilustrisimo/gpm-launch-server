@@ -85,6 +85,34 @@ module.exports = (sequelize, DataTypes) => {
     clickRate: {
       type: DataTypes.FLOAT,
       defaultValue: 0
+    },
+    sent: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    delivered: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    opens: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    clicks: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    unsubscribes: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    bounces: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
+    },
+    complaints: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0
     }
   }, {
     sequelize,
