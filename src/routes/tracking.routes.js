@@ -17,5 +17,6 @@ router.post('/batch-update', validateApiKey, trackingController.updateBatchTrack
 router.post('/contacts/unsubscribe', validateApiKey, trackingController.updateUnsubscribe);
 router.post('/contacts/bounce', validateApiKey, trackingController.recordBounce);
 router.post('/contacts/complaint', validateApiKey, trackingController.recordComplaint);
+router.post('/campaign/status', validateApiKey, trackingController.updateCampaignStatus);
 
 module.exports = router;

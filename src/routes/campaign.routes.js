@@ -38,7 +38,7 @@ router.put(
     body('subject').optional().trim(),
     body('templateId').optional().isUUID().withMessage('Invalid Template ID format'),
     body('contactListId').optional().isUUID().withMessage('Invalid Contact List ID format'),
-    body('status').optional().isIn(['draft', 'scheduled', 'sending', 'completed']).withMessage('Invalid status value'),
+    body('status').optional().isIn(['draft', 'scheduled', 'sending', 'processing', 'completed', 'stopped']).withMessage('Invalid status value'),
     body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
   ],
   campaignController.updateCampaign
@@ -49,6 +49,15 @@ router.delete('/:id', campaignController.deleteCampaign);
 
 // Schedule a campaign
 router.post('/:id/schedule', campaignController.scheduleCampaign);
+
+// Send campaign now
+router.post('/:id/send', campaignController.sendCampaignNow);
+
+// Stop a campaign
+router.post('/:id/stop', campaignController.stopCampaign);
+
+// Cancel scheduled campaign
+router.post('/:id/cancel', campaignController.cancelSchedule);
 
 // Cancel a scheduled campaign
 router.post('/:id/cancel-schedule', campaignController.cancelSchedule);

@@ -65,7 +65,7 @@ module.exports = (sequelize, DataTypes) => {
       }
     },
     status: {
-      type: DataTypes.ENUM('draft', 'scheduled', 'sending', 'completed'),
+      type: DataTypes.ENUM('draft', 'scheduled', 'sending', 'processing', 'completed', 'stopped'),
       defaultValue: 'draft'
     },
     scheduledFor: {

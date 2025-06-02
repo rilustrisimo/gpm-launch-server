@@ -7,6 +7,12 @@ const axios = require('axios');
 // Worker configuration
 const WORKER_URL = process.env.WORKER_URL || 'https://worker.gravitypointmedia.com';
 const WORKER_API_KEY = process.env.WORKER_API_KEY;
+const MAX_RETRIES = 3; // Maximum retry attempts for worker communication
+const RETRY_DELAY = 1000; // Delay between retries in milliseconds
+
+if (!WORKER_API_KEY) {
+  console.error('WARNING: WORKER_API_KEY environment variable is not set!');
+}
 
 // Helper function to make authenticated requests to the worker
 const workerClient = axios.create({
@@ -19,6 +25,82 @@ const workerClient = axios.create({
     return status < 500; // Resolve only if the status code is less than 500
   }
 });
+
+/**
+ * Execute a worker API call with retry logic
+ * @param {Function} apiCall - The API call function to execute
+ * @param {string} operation - Name of operation for logging
+ * @param {number} maxRetries - Maximum number of retry attempts
+ * @returns {Promise} - API response
+ */
+const executeWithRetry = async (apiCall, operation, maxRetries = MAX_RETRIES) => {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`${operation}: Attempt ${attempt + 1}/${maxRetries + 1}`);
+      const response = await apiCall();
+      
+      // Check for unsuccessful response
+      if (response.data && !response.data.success) {
+        const errorMessage = response.data.message || `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`;
+        console.warn(`${operation} returned non-success: ${errorMessage}`);
+        
+        // If this was the last attempt, throw an error
+        if (attempt === maxRetries) {
+          throw new Error(`Operation '${operation}' failed after ${maxRetries + 1} attempts: ${errorMessage}`);
+        }
+      } else {
+        // Success, return the response
+        return response;
+      }
+    } catch (error) {
+      lastError = error;
+      console.warn(`${operation} attempt ${attempt + 1} failed: ${error.message}`);
+      
+      // If this was the last attempt, rethrow the error
+      if (attempt === maxRetries) {
+        throw new Error(`Operation '${operation}' failed after ${maxRetries + 1} attempts: ${error.message}`);
+      }
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+    }
+  }
+  
+  // This should never be reached due to the throw in the loop, but just in case
+  throw lastError;
+};
+
+/**
+ * Helper function to prepare campaign data for worker
+ * @param {Object} campaign - Campaign model instance with associations loaded
+ * @returns {Object} - Formatted campaign data for worker
+ */
+const prepareCampaignDataForWorker = (campaign) => {
+  if (!campaign || !campaign.template || !campaign.contactList) {
+    throw new Error('Campaign data incomplete');
+  }
+
+  return {
+    id: campaign.id,
+    name: campaign.name,
+    subject: campaign.subject,
+    template: {
+      id: campaign.template.id,
+      subject: campaign.subject || campaign.template.subject,
+      content: campaign.template.html || campaign.template.content
+    },
+    recipients: (campaign.contactList.contacts || []).map(contact => ({
+      id: contact.id,
+      email: contact.email,
+      firstName: contact.firstName,
+      lastName: contact.lastName,
+      metadata: contact.metadata || {}
+    })),
+    status: 'initialized',
+    initializedAt: new Date().toISOString()
+  };
+};
 
 // Get all campaigns
 exports.getCampaigns = async (req, res) => {
@@ -107,14 +189,31 @@ exports.getCampaign = async (req, res) => {
         message: 'Campaign not found'
       });
     }      // If campaign is active or completed, fetch real-time stats from the worker
-    if (['processing', 'sending', 'completed'].includes(campaign.status)) {
+    if (['processing', 'sending', 'completed', 'stopped'].includes(campaign.status)) {
       try {
-        const workerResponse = await workerClient.get(`/api/campaigns/${campaign.id}/status`);
+        // Get status with retry mechanism
+        const workerResponse = await executeWithRetry(
+          () => workerClient.get(`/api/campaign/${campaign.id}/status`),
+          `Fetch status for campaign ${campaign.id}`,
+          1 // Only retry once for status checks to avoid delay
+        );
+        
         if (workerResponse.data && workerResponse.data.success) {
           // Merge worker stats with campaign data
           campaign.dataValues.workerStats = workerResponse.data.stats;
           campaign.dataValues.workerStatus = workerResponse.data.status;
           campaign.dataValues.progress = workerResponse.data.progress;
+          
+          // Synchronize status if different
+          if (
+            workerResponse.data.status && 
+            workerResponse.data.status !== campaign.status && 
+            ['sending', 'processing', 'completed', 'stopped'].includes(workerResponse.data.status)
+          ) {
+            // Update local database to match worker status
+            console.log(`Synchronizing campaign status from worker: ${campaign.status} -> ${workerResponse.data.status}`);
+            await campaign.update({ status: workerResponse.data.status });
+          }
         }
       } catch (workerError) {
         console.error('Worker stats fetch error:', workerError);
@@ -180,7 +279,7 @@ exports.createCampaign = async (req, res) => {
       });
     }
 
-    // Create campaign
+    // Create campaign - use status values compatible with worker
     const campaign = await Campaign.create({
       userId: req.user.id,
       name,
@@ -199,6 +298,31 @@ exports.createCampaign = async (req, res) => {
     }, { transaction });
 
     await transaction.commit();
+
+    // Initialize campaign in the worker
+    try {
+      // Load the full campaign data with associations
+      const completeData = await Campaign.findOne({
+        where: { id: campaign.id },
+        include: [
+          { model: Template, as: 'template' },
+          { 
+            model: ContactList, 
+            as: 'contactList',
+            include: [{ model: Contact, as: 'contacts', attributes: ['id', 'email', 'firstName', 'lastName', 'metadata'] }]
+          }
+        ]
+      });
+      
+      // Send to worker for initialization
+      const workerData = prepareCampaignDataForWorker(completeData);
+      await workerClient.post(`/api/campaign/${campaign.id}/initialize`, workerData);
+      
+      // No need to handle response here, as this is just initialization
+    } catch (workerError) {
+      console.warn('Worker campaign initialization failed (continuing):', workerError.message);
+      // Continue even if worker initialization fails - we can initialize it later
+    }
 
     return res.status(201).json({
       success: true,
@@ -311,6 +435,32 @@ exports.updateCampaign = async (req, res) => {
 
     await transaction.commit();
 
+    // Re-initialize campaign in the worker if it's not completed
+    if (updatedCampaign.status !== 'completed') {
+      try {
+        // Load the full campaign data with associations
+        const completeData = await Campaign.findOne({
+          where: { id: updatedCampaign.id },
+          include: [
+            { model: Template, as: 'template' },
+            { 
+              model: ContactList, 
+              as: 'contactList',
+              include: [{ model: Contact, as: 'contacts', attributes: ['id', 'email', 'firstName', 'lastName', 'metadata'] }]
+            }
+          ]
+        });
+        
+        // Send to worker for initialization
+        const workerData = prepareCampaignDataForWorker(completeData);
+        await workerClient.post(`/api/campaign/${updatedCampaign.id}/initialize`, workerData);
+        // No need to handle response here, as this is just initialization
+      } catch (workerError) {
+        console.warn('Worker campaign re-initialization failed (continuing):', workerError.message);
+        // Continue even if worker initialization fails - we can initialize it later
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Campaign updated successfully',
@@ -344,12 +494,37 @@ exports.deleteCampaign = async (req, res) => {
       });
     }
 
-    // Don't allow deleting campaigns that are currently sending
-    if (campaign.status === 'sending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete a campaign that is currently sending'
-      });
+    // If the campaign is sending, try to stop it in the worker first
+    if (campaign.status === 'sending' || campaign.status === 'processing') {
+      try {
+        // Try to stop the campaign in the worker
+        const stopResponse = await workerClient.post(`/api/campaign/${campaign.id}/stop`);
+        
+        if (stopResponse.data && stopResponse.data.success) {
+          console.log(`Campaign ${campaign.id} stopped in worker before deletion`);
+        } else {
+          console.error('Failed to stop campaign in worker:', stopResponse.data);
+          return res.status(400).json({
+            success: false,
+            message: 'Cannot delete campaign - failed to stop sending process'
+          });
+        }
+      } catch (workerError) {
+        console.error('Worker stop error:', workerError);
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot delete campaign - active campaign could not be stopped'
+        });
+      }
+    }
+
+    // Clean up campaign data from worker
+    try {
+      // Delete campaign data from worker's KV storage
+      await workerClient.delete(`/api/campaign/${campaign.id}`);
+    } catch (cleanupError) {
+      // Log but continue with deletion
+      console.warn(`Failed to clean up worker data for campaign ${campaign.id}:`, cleanupError.message);
     }
 
     await campaign.destroy();
@@ -413,7 +588,7 @@ exports.getCampaignStats = async (req, res) => {
     // For active campaigns, fetch the latest stats from the worker
     if (['processing', 'sending', 'completed'].includes(campaign.status)) {
       try {
-        const workerResponse = await workerClient.get(`/api/campaigns/${campaign.id}/status`);
+        const workerResponse = await workerClient.get(`/api/campaign/${campaign.id}/status`);
         
         if (workerResponse.data && workerResponse.data.success) {
           // Use worker stats as they're more up-to-date
@@ -519,41 +694,15 @@ exports.scheduleCampaign = async (req, res) => {
       });
     }
 
-    // 1. Initialize campaign in the worker
-    const campaignData = {
-      id: campaign.id,
-      name: campaign.name,
-      subject: campaign.subject,
-      templateId: campaign.templateId,
-      templateHtml: campaign.template.html,
-      templateText: campaign.template.text,
-      recipients: campaign.contactList.contacts.map(contact => ({
-        id: contact.id,
-        email: contact.email,
-        firstName: contact.firstName,
-        lastName: contact.lastName
-      })),
-      // Add these fields required by the worker
-      status: 'initialized',
-      initializedAt: new Date().toISOString()
-    };
+    // 1. Initialize campaign in the worker using our helper function
+    const campaignData = prepareCampaignDataForWorker(campaign);
 
     try {
-      // Initialize the campaign in the worker
-      const initResponse = await workerClient.post(`/api/campaigns/${campaign.id}/initialize`, campaignData);
-      
-      if (!initResponse.data || !initResponse.data.success) {
-        console.error('Worker initialization error:', {
-          status: initResponse.status, 
-          statusText: initResponse.statusText,
-          data: initResponse.data
-        });
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to initialize campaign in worker',
-          error: (initResponse.data && initResponse.data.message) ? initResponse.data.message : `HTTP ${initResponse.status}: ${initResponse.statusText || 'Unknown error'}`
-        });
-      }
+      // Initialize the campaign in the worker with retry mechanism
+      const initResponse = await executeWithRetry(
+        () => workerClient.post(`/api/campaign/${campaign.id}/initialize`, campaignData),
+        `Initialize campaign ${campaign.id} for scheduling`
+      );
 
       // 2. Schedule the campaign in the database
       const scheduledCampaign = await schedulerService.scheduleCampaign(
@@ -614,8 +763,11 @@ exports.cancelSchedule = async (req, res) => {
     }
 
     try {
-      // Remove from worker's scheduler
-      await workerClient.delete(`/api/scheduled_campaign:${campaign.id}`);
+      // Remove from worker's scheduler with retry mechanism
+      await executeWithRetry(
+        () => workerClient.delete(`/api/scheduled_campaign:${campaign.id}`),
+        `Cancel scheduled campaign ${campaign.id}`
+      );
       
       // Cancel in the database
       const cancelledCampaign = await schedulerService.cancelScheduledCampaign(campaign.id);
@@ -686,68 +838,21 @@ exports.sendCampaignNow = async (req, res) => {
       });
     }
 
-    // Prepare campaign data for the worker
-    const campaignData = {
-      id: campaign.id,
-      name: campaign.name,
-      subject: campaign.subject,
-      templateId: campaign.templateId,
-      templateHtml: campaign.template.html,
-      templateText: campaign.template.text,
-      recipients: campaign.contactList.contacts.map(contact => ({
-        id: contact.id,
-        email: contact.email,
-        firstName: contact.firstName,
-        lastName: contact.lastName
-      })),
-      // Add these fields required by the worker
-      status: 'initialized',
-      initializedAt: new Date().toISOString()
-    };
+    // Prepare campaign data for the worker using our helper function
+    const campaignData = prepareCampaignDataForWorker(campaign);
 
     try {
-      // Debug log to check what we're sending to the worker
-      console.log('Worker initialization request:', {
-        url: `${WORKER_URL}/api/campaigns/${campaign.id}/initialize`,
-        headers: workerClient.defaults.headers,
-        data: campaignData
-      });
+      // 1. Initialize the campaign in the worker with retry mechanism
+      const initResponse = await executeWithRetry(
+        () => workerClient.post(`/api/campaign/${campaign.id}/initialize`, campaignData),
+        `Initialize campaign ${campaign.id}`
+      );
       
-      // 1. Initialize the campaign in the worker
-      const initResponse = await workerClient.post(`/api/campaigns/${campaign.id}/initialize`, campaignData);
-      
-      // Debug log for worker response
-      console.log('Worker initialization response:', {
-        status: initResponse.status,
-        statusText: initResponse.statusText,
-        headers: initResponse.headers,
-        data: initResponse.data
-      });
-      
-      if (!initResponse.data || !initResponse.data.success) {
-        console.error('Worker initialization error:', initResponse.status, initResponse.data);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to initialize campaign in worker',
-          error: (initResponse.data && initResponse.data.message) ? initResponse.data.message : `HTTP ${initResponse.status}: ${initResponse.statusText || 'Unknown error'}`
-        });
-      }
-
-      // 2. Start the campaign processing
-      const startResponse = await workerClient.post(`/api/campaigns/${campaign.id}/start`);
-      
-      if (!startResponse.data || !startResponse.data.success) {
-        console.error('Worker start error:', {
-          status: startResponse.status, 
-          statusText: startResponse.statusText,
-          data: startResponse.data
-        });
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to start campaign processing in worker',
-          error: (startResponse.data && startResponse.data.message) ? startResponse.data.message : `HTTP ${startResponse.status}: ${startResponse.statusText || 'Unknown error'}`
-        });
-      }
+      // 2. Start the campaign processing with retry mechanism
+      const startResponse = await executeWithRetry(
+        () => workerClient.post(`/api/campaign/${campaign.id}/start`),
+        `Start campaign ${campaign.id}`
+      );
 
       // Update campaign status in database
       await campaign.update({
@@ -779,6 +884,72 @@ exports.sendCampaignNow = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Error sending campaign',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Stop a sending campaign
+exports.stopCampaign = async (req, res) => {
+  try {
+    const campaign = await Campaign.findOne({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found or access denied'
+      });
+    }
+
+    // Only allow stopping campaigns that are currently sending or processing
+    if (!['sending', 'processing'].includes(campaign.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot stop campaign with status: ${campaign.status}`
+      });
+    }
+
+    try {
+      // Stop the campaign in the worker with retry mechanism
+      const stopResponse = await executeWithRetry(
+        () => workerClient.post(`/api/campaign/${campaign.id}/stop`),
+        `Stop campaign ${campaign.id}`
+      );
+
+      // Update campaign status in database
+      await campaign.update({
+        status: 'stopped',
+        updatedAt: new Date()
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Campaign stopped successfully',
+        campaign: {
+          id: campaign.id,
+          name: campaign.name,
+          status: 'stopped'
+        },
+        workerStatus: stopResponse.data
+      });
+    } catch (workerError) {
+      console.error('Worker stop error:', workerError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error stopping campaign through worker',
+        error: process.env.NODE_ENV === 'development' ? workerError.message : undefined
+      });
+    }
+  } catch (error) {
+    console.error('Stop campaign error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error stopping campaign',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

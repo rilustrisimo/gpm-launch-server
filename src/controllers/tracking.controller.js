@@ -365,10 +365,102 @@ async function updateBatchTracking(req, res, next) {
   }
 }
 
+/**
+ * Update campaign status based on worker reports
+ * This endpoint allows the worker to report status changes directly to the server
+ */
+async function updateCampaignStatus(req, res, next) {
+  try {
+    console.log('📊 Received campaign status update:');
+    console.log(`- Body: ${JSON.stringify(req.body)}`);
+    
+    const { campaignId, status, stats } = req.body;
+    
+    if (!campaignId || !status) {
+      console.log('❌ Missing required parameters');
+      return next(createError('Missing required parameters', 400));
+    }
+    
+    console.log(`- Campaign ID: ${campaignId}`);
+    console.log(`- Status: ${status}`);
+    
+    // Find the campaign
+    const campaign = await Campaign.findByPk(campaignId);
+    if (!campaign) {
+      console.log('❌ Campaign not found');
+      return next(createError('Campaign not found', 404));
+    }
+    
+    // Validate status value
+    const validStatuses = ['draft', 'scheduled', 'sending', 'processing', 'completed', 'stopped'];
+    if (!validStatuses.includes(status)) {
+      console.log(`❌ Invalid status value: ${status}`);
+      return next(createError(`Invalid status value: ${status}`, 400));
+    }
+    
+    // Update the campaign status
+    await campaign.update({ status });
+    
+    // If stats are provided, update them too
+    if (stats) {
+      const updateData = {};
+      
+      // Process provided stats
+      if (stats.sent !== undefined) {
+        updateData.sent = stats.sent;
+      }
+      
+      if (stats.delivered !== undefined) {
+        updateData.delivered = stats.delivered;
+      }
+      
+      if (stats.opens !== undefined) {
+        updateData.opens = stats.opens;
+      }
+      
+      if (stats.clicks !== undefined) {
+        updateData.clicks = stats.clicks;
+      }
+      
+      if (stats.bounces !== undefined) {
+        updateData.bounces = stats.bounces;
+      }
+      
+      if (stats.complaints !== undefined) {
+        updateData.complaints = stats.complaints;
+      }
+      
+      if (stats.unsubscribes !== undefined) {
+        updateData.unsubscribes = stats.unsubscribes;
+      }
+      
+      if (Object.keys(updateData).length > 0) {
+        await campaign.update(updateData);
+      }
+    }
+    
+    // If status is completed, update completedAt timestamp
+    if (status === 'completed') {
+      await campaign.update({ completedAt: new Date() });
+    }
+    
+    console.log('✅ Campaign status updated successfully');
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Campaign status updated successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error updating campaign status:', error);
+    return next(createError('Internal server error', 500, error));
+  }
+}
+
 module.exports = {
   updateTracking,
+  updateBatchTracking,
   updateUnsubscribe,
   recordBounce,
   recordComplaint,
-  updateBatchTracking
+  updateCampaignStatus
 };
