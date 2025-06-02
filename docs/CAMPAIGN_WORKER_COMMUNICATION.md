@@ -93,3 +93,32 @@ All communication with the worker implements a retry mechanism:
 - Configurable via environment variables (`MAX_RETRIES`, `RETRY_DELAY`)
 - Logs detailed error information for failure diagnosis
 - Falls back to local operation for critical tasks when worker is unavailable
+
+The retry logic is implemented in the `executeWithRetry` helper function:
+
+```javascript
+const executeWithRetry = async (apiCall, operation, maxRetries = MAX_RETRIES) => {
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`${operation}: Attempt ${attempt + 1}/${maxRetries + 1}`);
+      const response = await apiCall();
+      
+      if (response.data && !response.data.success) {
+        // Handle unsuccessful response
+        if (attempt === maxRetries) {
+          throw new Error(`Operation failed after ${maxRetries + 1} attempts`);
+        }
+      } else {
+        return response;  // Success
+      }
+    } catch (error) {
+      // Handle error and retry if attempts remaining
+      if (attempt === maxRetries) {
+        throw new Error(`Operation failed after ${maxRetries + 1} attempts`);
+      }
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+    }
+  }
+};
+```
