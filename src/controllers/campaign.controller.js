@@ -14,6 +14,9 @@ const workerClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${WORKER_API_KEY}`
+  },
+  validateStatus: function (status) {
+    return status < 500; // Resolve only if the status code is less than 500
   }
 });
 
@@ -103,12 +106,10 @@ exports.getCampaign = async (req, res) => {
         success: false,
         message: 'Campaign not found'
       });
-    }
-
-    // If campaign is active or completed, fetch real-time stats from the worker
+    }      // If campaign is active or completed, fetch real-time stats from the worker
     if (['processing', 'sending', 'completed'].includes(campaign.status)) {
       try {
-        const workerResponse = await workerClient.get(`/campaigns/${campaign.id}/status`);
+        const workerResponse = await workerClient.get(`/api/campaigns/${campaign.id}/status`);
         if (workerResponse.data && workerResponse.data.success) {
           // Merge worker stats with campaign data
           campaign.dataValues.workerStats = workerResponse.data.stats;
@@ -412,7 +413,7 @@ exports.getCampaignStats = async (req, res) => {
     // For active campaigns, fetch the latest stats from the worker
     if (['processing', 'sending', 'completed'].includes(campaign.status)) {
       try {
-        const workerResponse = await workerClient.get(`/campaigns/${campaign.id}/status`);
+        const workerResponse = await workerClient.get(`/api/campaigns/${campaign.id}/status`);
         
         if (workerResponse.data && workerResponse.data.success) {
           // Use worker stats as they're more up-to-date
@@ -531,18 +532,26 @@ exports.scheduleCampaign = async (req, res) => {
         email: contact.email,
         firstName: contact.firstName,
         lastName: contact.lastName
-      }))
+      })),
+      // Add these fields required by the worker
+      status: 'initialized',
+      initializedAt: new Date().toISOString()
     };
 
     try {
       // Initialize the campaign in the worker
-      const initResponse = await workerClient.post(`/campaigns/${campaign.id}/initialize`, campaignData);
+      const initResponse = await workerClient.post(`/api/campaigns/${campaign.id}/initialize`, campaignData);
       
-      if (!initResponse.data.success) {
+      if (!initResponse.data || !initResponse.data.success) {
+        console.error('Worker initialization error:', {
+          status: initResponse.status, 
+          statusText: initResponse.statusText,
+          data: initResponse.data
+        });
         return res.status(500).json({
           success: false,
           message: 'Failed to initialize campaign in worker',
-          error: initResponse.data.message
+          error: (initResponse.data && initResponse.data.message) ? initResponse.data.message : `HTTP ${initResponse.status}: ${initResponse.statusText || 'Unknown error'}`
         });
       }
 
@@ -553,7 +562,7 @@ exports.scheduleCampaign = async (req, res) => {
       );
 
       // 3. Add to the worker's scheduler
-      await workerClient.put(`/scheduled_campaign:${campaign.id}`, {
+      await workerClient.put(`/api/scheduled_campaign:${campaign.id}`, {
         scheduledFor: new Date(scheduledFor).toISOString()
       });
 
@@ -606,7 +615,7 @@ exports.cancelSchedule = async (req, res) => {
 
     try {
       // Remove from worker's scheduler
-      await workerClient.delete(`/scheduled_campaign:${campaign.id}`);
+      await workerClient.delete(`/api/scheduled_campaign:${campaign.id}`);
       
       // Cancel in the database
       const cancelledCampaign = await schedulerService.cancelScheduledCampaign(campaign.id);
@@ -690,29 +699,38 @@ exports.sendCampaignNow = async (req, res) => {
         email: contact.email,
         firstName: contact.firstName,
         lastName: contact.lastName
-      }))
+      })),
+      // Add these fields required by the worker
+      status: 'initialized',
+      initializedAt: new Date().toISOString()
     };
 
     try {
       // 1. Initialize the campaign in the worker
       const initResponse = await workerClient.post(`/campaigns/${campaign.id}/initialize`, campaignData);
       
-      if (!initResponse.data.success) {
+      if (!initResponse.data || !initResponse.data.success) {
+        console.error('Worker initialization error:', initResponse.status, initResponse.data);
         return res.status(500).json({
           success: false,
           message: 'Failed to initialize campaign in worker',
-          error: initResponse.data.message
+          error: (initResponse.data && initResponse.data.message) ? initResponse.data.message : `HTTP ${initResponse.status}: ${initResponse.statusText || 'Unknown error'}`
         });
       }
 
       // 2. Start the campaign processing
-      const startResponse = await workerClient.post(`/campaigns/${campaign.id}/start`);
+      const startResponse = await workerClient.post(`/api/campaigns/${campaign.id}/start`);
       
-      if (!startResponse.data.success) {
+      if (!startResponse.data || !startResponse.data.success) {
+        console.error('Worker start error:', {
+          status: startResponse.status, 
+          statusText: startResponse.statusText,
+          data: startResponse.data
+        });
         return res.status(500).json({
           success: false,
           message: 'Failed to start campaign processing in worker',
-          error: startResponse.data.message
+          error: (startResponse.data && startResponse.data.message) ? startResponse.data.message : `HTTP ${startResponse.status}: ${startResponse.statusText || 'Unknown error'}`
         });
       }
 
