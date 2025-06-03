@@ -299,31 +299,6 @@ exports.createCampaign = async (req, res) => {
 
     await transaction.commit();
 
-    // Initialize campaign in the worker
-    try {
-      // Load the full campaign data with associations
-      const completeData = await Campaign.findOne({
-        where: { id: campaign.id },
-        include: [
-          { model: Template, as: 'template' },
-          { 
-            model: ContactList, 
-            as: 'contactList',
-            include: [{ model: Contact, as: 'contacts', attributes: ['id', 'email', 'firstName', 'lastName', 'metadata'] }]
-          }
-        ]
-      });
-      
-      // Send to worker for initialization
-      const workerData = prepareCampaignDataForWorker(completeData);
-      await workerClient.post(`/api/campaign/${campaign.id}/initialize`, workerData);
-      
-      // No need to handle response here, as this is just initialization
-    } catch (workerError) {
-      console.warn('Worker campaign initialization failed (continuing):', workerError.message);
-      // Continue even if worker initialization fails - we can initialize it later
-    }
-
     return res.status(201).json({
       success: true,
       message: 'Campaign created successfully',
@@ -435,29 +410,27 @@ exports.updateCampaign = async (req, res) => {
 
     await transaction.commit();
 
-    // Re-initialize campaign in the worker if it's not completed
-    if (updatedCampaign.status !== 'completed') {
+    // If campaign is being updated and was previously active, stop it in the worker
+    if (['processing', 'sending', 'scheduled'].includes(campaign.status)) {
       try {
-        // Load the full campaign data with associations
-        const completeData = await Campaign.findOne({
-          where: { id: updatedCampaign.id },
-          include: [
-            { model: Template, as: 'template' },
-            { 
-              model: ContactList, 
-              as: 'contactList',
-              include: [{ model: Contact, as: 'contacts', attributes: ['id', 'email', 'firstName', 'lastName', 'metadata'] }]
-            }
-          ]
+        // Stop the campaign in the worker
+        await executeWithRetry(
+          () => workerClient.post(`/api/campaign/${updatedCampaign.id}/stop`),
+          `Stop campaign ${updatedCampaign.id} for update`
+        );
+        
+        // Update campaign status to stopped
+        await updatedCampaign.update({
+          status: 'stopped'
         });
         
-        // Send to worker for initialization
-        const workerData = prepareCampaignDataForWorker(completeData);
-        await workerClient.post(`/api/campaign/${updatedCampaign.id}/initialize`, workerData);
-        // No need to handle response here, as this is just initialization
+        console.log(`Campaign ${updatedCampaign.id} stopped due to update`);
       } catch (workerError) {
-        console.warn('Worker campaign re-initialization failed (continuing):', workerError.message);
-        // Continue even if worker initialization fails - we can initialize it later
+        console.warn('Worker stop campaign failed during update:', workerError.message);
+        // Even if worker stop fails, we still set the campaign to stopped status
+        await updatedCampaign.update({
+          status: 'stopped'
+        });
       }
     }
 
