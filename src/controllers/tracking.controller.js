@@ -68,6 +68,11 @@ async function updateTracking(req, res, next) {
       case 'delivery':
         // Update delivery stats
         await campaign.increment('delivered');
+        
+        // Update contact's last delivered timestamp
+        await contact.update({
+          lastDelivered: trackingData.timestamp || new Date()
+        });
         break;
         
       case 'send':
