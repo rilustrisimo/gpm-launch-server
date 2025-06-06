@@ -516,3 +516,49 @@ exports.importContacts = async (req, res) => {
     });
   }
 };
+
+// Get contact by email
+exports.getContactByEmail = async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email parameter is required'
+      });
+    }
+
+    const contact = await Contact.findOne({
+      where: { email: email.toLowerCase() },
+      attributes: ['id', 'email', 'firstName', 'lastName', 'status'],
+      include: [
+        {
+          model: ContactList,
+          as: 'lists',
+          attributes: ['id', 'name'],
+          through: { attributes: [] }
+        }
+      ]
+    });
+
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      contact
+    });
+  } catch (error) {
+    console.error('Get contact by email error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error retrieving contact by email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

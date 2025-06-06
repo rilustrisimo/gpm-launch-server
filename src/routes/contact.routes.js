@@ -1,12 +1,15 @@
 const express = require('express');
 const { body } = require('express-validator');
 const contactController = require('../controllers/contact.controller');
-const { auth } = require('../middleware/auth.middleware');
+const { auth, validateApiKey } = require('../middleware/auth.middleware');
 const ContactList = require('../models/contactList');
 
 const router = express.Router();
 
-// Apply auth middleware to all routes
+// Get contact by email (for SES webhook) - uses API key auth
+router.get('/by-email/:email', validateApiKey, contactController.getContactByEmail);
+
+// Apply auth middleware to all other routes
 router.use(auth);
 
 // Get all contacts
