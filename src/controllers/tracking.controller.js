@@ -44,16 +44,6 @@ async function updateTracking(req, res, next) {
     
     // Update campaign statistics based on tracking event type
     switch (trackingData.type) {
-      case 'open':
-        // Update open stats
-        await campaign.increment('opens');
-        
-        // Update contact's last opened timestamp
-        await contact.update({
-          lastOpened: trackingData.timestamp || new Date()
-        });
-        break;
-        
       case 'click':
         // Update click stats
         await campaign.increment('clicks');
@@ -136,8 +126,8 @@ async function recordBounce(req, res, next) {
     if (!email) {
       return next(createError('Email is required', 400));
     }
-    
-    console.log(`Processing bounce for email: ${email}, type: ${bounceType || 'unknown'}`);
+
+    console.log(`Processing bounce for email: ${email}, type: ${bounceType || 'unknown'}, messageId: ${messageId}`);
     
     // Find the contact by email
     const contact = await Contact.findOne({ where: { email: email.toLowerCase() } });
@@ -152,7 +142,28 @@ async function recordBounce(req, res, next) {
         contactExists: false
       });
     }
-    
+
+    // Check if this specific bounce has already been processed for this contact
+    // Use messageId and email combination for deduplication
+    if (messageId && contact.lastBouncedAt) {
+      // If the contact already has a bounce recorded and it's for the same message ID
+      // we can check if this is a duplicate by comparing timestamps
+      const existingBounceTime = new Date(contact.lastBouncedAt);
+      const currentBounceTime = timestamp ? new Date(timestamp) : new Date();
+      
+      // If the bounce times are very close (within 1 minute) and the contact is already marked as bounced,
+      // this is likely a duplicate event
+      if (contact.hasBounced && Math.abs(currentBounceTime - existingBounceTime) < 60000) {
+        console.log(`Duplicate bounce event detected for email: ${email}, messageId: ${messageId}`);
+        return res.status(200).json({ 
+          success: true,
+          warning: 'Duplicate bounce event ignored',
+          contactExists: true,
+          contactId: contact.id
+        });
+      }
+    }
+
     // Update the bounce status
     await contact.update({
       hasBounced: true,
@@ -312,11 +323,6 @@ async function updateBatchTracking(req, res, next) {
           
           // Update campaign statistics based on tracking event type
           switch (trackingData.type) {
-            case 'open':
-              await campaign.increment('opens');
-              await contact.update({ lastOpened: trackingData.timestamp || new Date() });
-              break;
-              
             case 'click':
               await campaign.increment('clicks');
               await contact.update({
@@ -417,10 +423,6 @@ async function updateCampaignStatus(req, res, next) {
       
       if (stats.delivered !== undefined) {
         updateData.delivered = stats.delivered;
-      }
-      
-      if (stats.opens !== undefined) {
-        updateData.opens = stats.opens;
       }
       
       if (stats.clicks !== undefined) {

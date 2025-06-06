@@ -233,7 +233,6 @@ class CampaignService {
         await campaign.update({
           status: 'completed',
           sentAt: completedAt,
-          openRate: status.stats.opened / status.stats.total * 100 || 0,
           clickRate: status.stats.clicked / status.stats.total * 100 || 0
         });
       }

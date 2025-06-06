@@ -84,8 +84,7 @@ When a campaign is ready to be sent, the API orchestrates the process:
 
 ### Tracking Campaign Metrics
 
-- Open tracking: Uses a 1x1 transparent pixel in the email
-- Click tracking: Rewrites links to pass through the tracking server
+- Click tracking: Rewrites links to pass through the tracking server  
 - All metrics are stored in Cloudflare KV for fast access
 
 ## Development
