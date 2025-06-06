@@ -4,7 +4,7 @@
  * Handles tracking data updates from the Cloudflare Worker
  */
 
-const { Campaign, Contact } = require('../models');
+const { Campaign, Contact, ContactList, ContactListContacts } = require('../models');
 const { createError } = require('../utils/error');
 
 /**
@@ -46,7 +46,13 @@ async function updateTracking(req, res, next) {
     switch (trackingData.type) {
       case 'click':
         // Update click stats
-        await campaign.increment('clicks');
+        try {
+          await campaign.increment('clicks', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign clicks: ${incrementError.message}`);
+          const currentCount = campaign.clicks || 0;
+          await campaign.update({ clicks: currentCount + 1 });
+        }
         
         // Update contact's last click timestamp and clicked link
         await contact.update({
@@ -57,7 +63,13 @@ async function updateTracking(req, res, next) {
         
       case 'delivery':
         // Update delivery stats
-        await campaign.increment('delivered');
+        try {
+          await campaign.increment('delivered', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign delivered: ${incrementError.message}`);
+          const currentCount = campaign.delivered || 0;
+          await campaign.update({ delivered: currentCount + 1 });
+        }
         
         // Update contact's last delivered timestamp
         await contact.update({
@@ -67,7 +79,13 @@ async function updateTracking(req, res, next) {
         
       case 'send':
         // Update send stats
-        await campaign.increment('sent');
+        try {
+          await campaign.increment('sent', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign sent: ${incrementError.message}`);
+          const currentCount = campaign.sent || 0;
+          await campaign.update({ sent: currentCount + 1 });
+        }
         break;
     }
     
@@ -89,29 +107,89 @@ async function updateUnsubscribe(req, res, next) {
       return next(createError('Email is required', 400));
     }
     
+    console.log(`Processing unsubscribe for email: ${email}, campaignId: ${campaignId}`);
+    
     // Find the contact by email
     const contact = await Contact.findOne({ where: { email: email.toLowerCase() } });
     if (!contact) {
+      console.log(`Contact not found for email: ${email}`);
       return next(createError('Contact not found', 404));
     }
     
-    // Update the unsubscribe status
+    console.log(`Found contact: ${contact.id} (${contact.email})`);
+    
+    // Update the contact's unsubscribe status and overall status
     await contact.update({
       unsubscribed: true,
-      unsubscribedAt: timestamp || new Date()
+      unsubscribedAt: timestamp || new Date(),
+      status: 'unsubscribed'
     });
     
-    // If campaign ID is provided, record the unsubscribe source
-    if (campaignId) {
-      const campaign = await Campaign.findByPk(campaignId);
-      if (campaign) {
-        await campaign.increment('unsubscribes');
+    console.log(`Updated contact status to unsubscribed`);
+    
+    // Remove contact from all lists and update list counts
+    const contactListAssociations = await ContactListContacts.findAll({
+      where: { contactId: contact.id }
+    });
+    
+    console.log(`Found ${contactListAssociations.length} list associations to remove`);
+    
+    // Remove from each list and update counts
+    for (const association of contactListAssociations) {
+      // Remove the association
+      await ContactListContacts.destroy({
+        where: {
+          contactId: contact.id,
+          contactListId: association.contactListId
+        }
+      });
+      
+      // Update the list count
+      const contactList = await ContactList.findByPk(association.contactListId);
+      if (contactList) {
+        await contactList.decrement('count');
+        console.log(`Decremented count for list: ${contactList.name} (${contactList.id})`);
       }
     }
     
+    // If campaign ID is provided, record the unsubscribe source
+    if (campaignId) {
+      console.log(`Updating campaign unsubscribe count for campaign: ${campaignId}`);
+      
+      const campaign = await Campaign.findByPk(campaignId);
+      if (campaign) {
+        try {
+          // Use increment with explicit field specification
+          await campaign.increment('unsubscribes', { by: 1 });
+          
+          // Reload to get updated values
+          await campaign.reload();
+          console.log(`Successfully incremented unsubscribe count for campaign: ${campaignId}`);
+          console.log(`New unsubscribe count: ${campaign.unsubscribes}`);
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign unsubscribes: ${incrementError.message}`);
+          // Try alternative approach
+          const currentCount = campaign.unsubscribes || 0;
+          await campaign.update({ unsubscribes: currentCount + 1 });
+          console.log(`Fallback: Updated unsubscribe count manually to ${currentCount + 1}`);
+        }
+      } else {
+        console.log(`Campaign not found: ${campaignId}`);
+      }
+    }
+    
+    console.log(`Successfully processed unsubscribe for contact: ${contact.id} (${email})`);
+    
     // Return success
-    res.status(200).json({ success: true });
+    res.status(200).json({ 
+      success: true,
+      message: 'Unsubscribe processed successfully',
+      contactId: contact.id,
+      listsRemoved: contactListAssociations.length
+    });
   } catch (error) {
+    console.error(`Error in updateUnsubscribe: ${error.message}`);
+    console.error(error.stack);
     next(createError('Failed to update unsubscribe status', 500, error));
   }
 }
@@ -180,8 +258,16 @@ async function recordBounce(req, res, next) {
           const campaignId = campaignIdMatch[1];
           const campaign = await Campaign.findByPk(campaignId);
           if (campaign) {
-            await campaign.increment('bounces');
-            console.log(`Incremented bounce count for campaign: ${campaignId}`);
+            try {
+              await campaign.increment('bounces', { by: 1 });
+              await campaign.reload();
+              console.log(`Incremented bounce count for campaign: ${campaignId}`);
+            } catch (incrementError) {
+              console.error(`Error incrementing campaign bounces: ${incrementError.message}`);
+              const currentCount = campaign.bounces || 0;
+              await campaign.update({ bounces: currentCount + 1 });
+              console.log(`Fallback: Updated bounce count manually to ${currentCount + 1}`);
+            }
           }
         }
       } catch (err) {
@@ -249,8 +335,16 @@ async function recordComplaint(req, res, next) {
           const campaignId = campaignIdMatch[1];
           const campaign = await Campaign.findByPk(campaignId);
           if (campaign) {
-            await campaign.increment('complaints');
-            console.log(`Incremented complaint count for campaign: ${campaignId}`);
+            try {
+              await campaign.increment('complaints', { by: 1 });
+              await campaign.reload();
+              console.log(`Incremented complaint count for campaign: ${campaignId}`);
+            } catch (incrementError) {
+              console.error(`Error incrementing campaign complaints: ${incrementError.message}`);
+              const currentCount = campaign.complaints || 0;
+              await campaign.update({ complaints: currentCount + 1 });
+              console.log(`Fallback: Updated complaint count manually to ${currentCount + 1}`);
+            }
           }
         }
       } catch (err) {
@@ -324,7 +418,15 @@ async function updateBatchTracking(req, res, next) {
           // Update campaign statistics based on tracking event type
           switch (trackingData.type) {
             case 'click':
-              await campaign.increment('clicks');
+              // Update click stats with robust increment
+              try {
+                await campaign.increment('clicks', { by: 1 });
+              } catch (incrementError) {
+                console.error(`Error incrementing campaign clicks in batch: ${incrementError.message}`);
+                const currentCount = campaign.clicks || 0;
+                await campaign.update({ clicks: currentCount + 1 });
+              }
+              
               await contact.update({
                 lastClicked: trackingData.timestamp || new Date(),
                 lastClickedLink: trackingData.link || null
@@ -332,12 +434,27 @@ async function updateBatchTracking(req, res, next) {
               break;
               
             case 'delivery':
-              await campaign.increment('delivered');
+              // Update delivery stats with robust increment
+              try {
+                await campaign.increment('delivered', { by: 1 });
+              } catch (incrementError) {
+                console.error(`Error incrementing campaign delivered in batch: ${incrementError.message}`);
+                const currentCount = campaign.delivered || 0;
+                await campaign.update({ delivered: currentCount + 1 });
+              }
+              
               await contact.update({ lastDelivered: trackingData.timestamp || new Date() });
               break;
               
             case 'send':
-              await campaign.increment('sent');
+              // Update send stats with robust increment
+              try {
+                await campaign.increment('sent', { by: 1 });
+              } catch (incrementError) {
+                console.error(`Error incrementing campaign sent in batch: ${incrementError.message}`);
+                const currentCount = campaign.sent || 0;
+                await campaign.update({ sent: currentCount + 1 });
+              }
               break;
               
             default:
