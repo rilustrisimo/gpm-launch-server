@@ -37,7 +37,7 @@ class EmailService {
     
     const unsubscribeHtml = `
       <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #666;">
-        <p>If you no longer wish to receive these emails, you can <a href="${unsubscribeUrl}" style="color: #666;">unsubscribe here</a>.</p>
+        <p>You’re receiving this email because we thought this tool might be useful. If you’d prefer not to receive future messages, you can <a href="${unsubscribeUrl}" style="color: #666;">unsubscribe here</a>.</p>
       </div>
     `;
     
