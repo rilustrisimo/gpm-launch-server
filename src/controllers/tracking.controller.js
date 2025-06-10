@@ -54,10 +54,29 @@ async function updateTracking(req, res, next) {
           await campaign.update({ clicks: currentCount + 1 });
         }
         
-        // Update contact's last click timestamp and clicked link
+        // Update contact's last click timestamp, clicked link, and last engagement
         await contact.update({
           lastClicked: trackingData.timestamp || new Date(),
-          lastClickedLink: trackingData.link || null
+          lastClickedLink: trackingData.link || null,
+          lastEngagement: trackingData.timestamp || new Date()
+        });
+        break;
+        
+      case 'open':
+        // Update open stats if available (though opens are typically disabled in SES)
+        try {
+          if (campaign.opens !== undefined) {
+            await campaign.increment('opens', { by: 1 });
+          }
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign opens: ${incrementError.message}`);
+          // Continue without failing
+        }
+        
+        // Update contact's last open timestamp and last engagement
+        await contact.update({
+          lastOpened: trackingData.timestamp || new Date(),
+          lastEngagement: trackingData.timestamp || new Date()
         });
         break;
         
@@ -71,9 +90,10 @@ async function updateTracking(req, res, next) {
           await campaign.update({ delivered: currentCount + 1 });
         }
         
-        // Update contact's last delivered timestamp
+        // Update contact's last delivered timestamp and last engagement
         await contact.update({
-          lastDelivered: trackingData.timestamp || new Date()
+          lastDelivered: trackingData.timestamp || new Date(),
+          lastEngagement: trackingData.timestamp || new Date()
         });
         break;
         
@@ -86,6 +106,11 @@ async function updateTracking(req, res, next) {
           const currentCount = campaign.sent || 0;
           await campaign.update({ sent: currentCount + 1 });
         }
+        
+        // Update contact's last engagement for send events
+        await contact.update({
+          lastEngagement: trackingData.timestamp || new Date()
+        });
         break;
     }
     
@@ -122,7 +147,8 @@ async function updateUnsubscribe(req, res, next) {
     await contact.update({
       unsubscribed: true,
       unsubscribedAt: timestamp || new Date(),
-      status: 'unsubscribed'
+      status: 'unsubscribed',
+      lastEngagement: timestamp || new Date()
     });
     
     console.log(`Updated contact status to unsubscribed`);
@@ -246,7 +272,9 @@ async function recordBounce(req, res, next) {
     await contact.update({
       hasBounced: true,
       bounceType: bounceType || 'unknown',
-      lastBouncedAt: timestamp || new Date()
+      lastBouncedAt: timestamp || new Date(),
+      status: bounceType && bounceType.toLowerCase() === 'permanent' ? 'bounced' : contact.status,
+      lastEngagement: timestamp || new Date()
     });
     
     // If messageId contains campaignId, update the campaign bounce counter
@@ -323,7 +351,9 @@ async function recordComplaint(req, res, next) {
       complaintType: complaintType || 'unknown',
       lastComplainedAt: timestamp || new Date(),
       unsubscribed: true,
-      unsubscribedAt: timestamp || new Date()
+      unsubscribedAt: timestamp || new Date(),
+      status: 'unsubscribed',
+      lastEngagement: timestamp || new Date()
     });
     
     // If messageId contains campaignId, update the campaign complaints counter
@@ -429,7 +459,25 @@ async function updateBatchTracking(req, res, next) {
               
               await contact.update({
                 lastClicked: trackingData.timestamp || new Date(),
-                lastClickedLink: trackingData.link || null
+                lastClickedLink: trackingData.link || null,
+                lastEngagement: trackingData.timestamp || new Date()
+              });
+              break;
+              
+            case 'open':
+              // Update open stats if available
+              try {
+                if (campaign.opens !== undefined) {
+                  await campaign.increment('opens', { by: 1 });
+                }
+              } catch (incrementError) {
+                console.error(`Error incrementing campaign opens in batch: ${incrementError.message}`);
+                // Continue without failing
+              }
+              
+              await contact.update({
+                lastOpened: trackingData.timestamp || new Date(),
+                lastEngagement: trackingData.timestamp || new Date()
               });
               break;
               
@@ -443,7 +491,10 @@ async function updateBatchTracking(req, res, next) {
                 await campaign.update({ delivered: currentCount + 1 });
               }
               
-              await contact.update({ lastDelivered: trackingData.timestamp || new Date() });
+              await contact.update({ 
+                lastDelivered: trackingData.timestamp || new Date(),
+                lastEngagement: trackingData.timestamp || new Date()
+              });
               break;
               
             case 'send':
@@ -455,6 +506,10 @@ async function updateBatchTracking(req, res, next) {
                 const currentCount = campaign.sent || 0;
                 await campaign.update({ sent: currentCount + 1 });
               }
+              
+              await contact.update({
+                lastEngagement: trackingData.timestamp || new Date()
+              });
               break;
               
             default:
@@ -580,11 +635,161 @@ async function updateCampaignStatus(req, res, next) {
   }
 }
 
+/**
+ * Update contact tracking fields for campaign send events
+ * This ensures all tracking fields are properly maintained during campaign execution
+ */
+async function updateContactForCampaignSend(req, res, next) {
+  try {
+    const { contactId, campaignId, eventType, timestamp, data } = req.body;
+    
+    if (!contactId || !campaignId || !eventType) {
+      return next(createError('Missing required parameters', 400));
+    }
+    
+    console.log(`Updating contact ${contactId} for campaign ${campaignId} event: ${eventType}`);
+    
+    // Find the contact
+    const contact = await Contact.findByPk(contactId);
+    if (!contact) {
+      console.log(`Contact not found: ${contactId}`);
+      return next(createError('Contact not found', 404));
+    }
+    
+    // Find the campaign
+    const campaign = await Campaign.findByPk(campaignId);
+    if (!campaign) {
+      console.log(`Campaign not found: ${campaignId}`);
+      return next(createError('Campaign not found', 404));
+    }
+    
+    const updateTimestamp = timestamp || new Date();
+    let contactUpdates = {
+      lastEngagement: updateTimestamp
+    };
+    
+    // Handle different event types and update appropriate fields
+    switch (eventType.toLowerCase()) {
+      case 'send':
+        // For send events, just update last engagement
+        break;
+        
+      case 'delivery':
+        contactUpdates.lastDelivered = updateTimestamp;
+        try {
+          await campaign.increment('delivered', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign delivered: ${incrementError.message}`);
+          const currentCount = campaign.delivered || 0;
+          await campaign.update({ delivered: currentCount + 1 });
+        }
+        break;
+        
+      case 'open':
+        contactUpdates.lastOpened = updateTimestamp;
+        try {
+          if (campaign.opens !== undefined) {
+            await campaign.increment('opens', { by: 1 });
+          }
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign opens: ${incrementError.message}`);
+        }
+        break;
+        
+      case 'click':
+        contactUpdates.lastClicked = updateTimestamp;
+        if (data && data.link) {
+          contactUpdates.lastClickedLink = data.link;
+        }
+        try {
+          await campaign.increment('clicks', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign clicks: ${incrementError.message}`);
+          const currentCount = campaign.clicks || 0;
+          await campaign.update({ clicks: currentCount + 1 });
+        }
+        break;
+        
+      case 'bounce':
+        contactUpdates.hasBounced = true;
+        contactUpdates.lastBouncedAt = updateTimestamp;
+        if (data && data.bounceType) {
+          contactUpdates.bounceType = data.bounceType;
+          // Update status to 'bounced' for permanent bounces
+          if (data.bounceType.toLowerCase() === 'permanent') {
+            contactUpdates.status = 'bounced';
+          }
+        }
+        try {
+          await campaign.increment('bounces', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign bounces: ${incrementError.message}`);
+          const currentCount = campaign.bounces || 0;
+          await campaign.update({ bounces: currentCount + 1 });
+        }
+        break;
+        
+      case 'complaint':
+        contactUpdates.hasComplained = true;
+        contactUpdates.lastComplainedAt = updateTimestamp;
+        contactUpdates.unsubscribed = true;
+        contactUpdates.unsubscribedAt = updateTimestamp;
+        contactUpdates.status = 'unsubscribed';
+        if (data && data.complaintType) {
+          contactUpdates.complaintType = data.complaintType;
+        }
+        try {
+          await campaign.increment('complaints', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign complaints: ${incrementError.message}`);
+          const currentCount = campaign.complaints || 0;
+          await campaign.update({ complaints: currentCount + 1 });
+        }
+        break;
+        
+      case 'unsubscribe':
+        contactUpdates.unsubscribed = true;
+        contactUpdates.unsubscribedAt = updateTimestamp;
+        contactUpdates.status = 'unsubscribed';
+        try {
+          await campaign.increment('unsubscribes', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign unsubscribes: ${incrementError.message}`);
+          const currentCount = campaign.unsubscribes || 0;
+          await campaign.update({ unsubscribes: currentCount + 1 });
+        }
+        break;
+        
+      default:
+        return next(createError(`Unknown event type: ${eventType}`, 400));
+    }
+    
+    // Update the contact with all changes
+    await contact.update(contactUpdates);
+    
+    console.log(`Successfully updated contact ${contactId} for ${eventType} event`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Contact tracking fields updated successfully',
+      contactId,
+      campaignId,
+      eventType,
+      updatedFields: Object.keys(contactUpdates)
+    });
+    
+  } catch (error) {
+    console.error(`Error updating contact for campaign send: ${error.message}`);
+    next(createError('Failed to update contact tracking fields', 500, error));
+  }
+}
+
 module.exports = {
   updateTracking,
   updateBatchTracking,
   updateUnsubscribe,
   recordBounce,
   recordComplaint,
-  updateCampaignStatus
+  updateCampaignStatus,
+  updateContactForCampaignSend
 };

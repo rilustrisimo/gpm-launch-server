@@ -18,5 +18,6 @@ router.post('/contacts/unsubscribe', validateApiKey, trackingController.updateUn
 router.post('/contacts/bounce', validateApiKey, trackingController.recordBounce);
 router.post('/contacts/complaint', validateApiKey, trackingController.recordComplaint);
 router.post('/campaign/status', validateApiKey, trackingController.updateCampaignStatus);
+router.post('/contact/campaign-send', validateApiKey, trackingController.updateContactForCampaignSend);
 
 module.exports = router;
