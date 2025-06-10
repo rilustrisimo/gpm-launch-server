@@ -562,3 +562,42 @@ exports.getContactByEmail = async (req, res) => {
     });
   }
 };
+
+// Get contact by email (used by worker for tracking)
+exports.getContactByEmail = async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email parameter is required'
+      });
+    }
+    
+    const contact = await Contact.findOne({
+      where: { email: email.toLowerCase() },
+      attributes: ['id', 'email', 'firstName', 'lastName', 'status']
+    });
+    
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found',
+        contact: null
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      contact
+    });
+  } catch (error) {
+    console.error('Get contact by email error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error retrieving contact',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
