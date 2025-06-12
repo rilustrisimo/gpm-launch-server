@@ -1,4 +1,5 @@
 const dns = require('dns');
+const net = require('net');
 const { promisify } = require('util');
 const disposableEmailDomains = require('disposable-email-domains');
 const { validate } = require('deep-email-validator');
@@ -43,6 +44,199 @@ async function dnsLookupWithRetry(domain, retries = 3, timeout = 5000) {
   }
   
   throw lastError; // All attempts failed
+}
+
+// Custom SMTP validation function for detailed responses
+async function performDetailedSmtpCheck(email, mxRecord) {
+  return new Promise((resolve) => {
+    const timeout = 15000; // 15 second timeout
+    const [localPart, domain] = email.split('@');
+    
+    // Create socket connection
+    const socket = new net.Socket();
+    let responses = [];
+    let currentStep = 'connect';
+    let smtpResponse = '';
+    
+    const cleanup = () => {
+      socket.removeAllListeners();
+      if (socket.readable || socket.writable) {
+        socket.destroy();
+      }
+    };
+    
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      resolve({
+        valid: false,
+        response: 'Connection timeout',
+        step: currentStep,
+        responses: responses,
+        error: 'SMTP_TIMEOUT'
+      });
+    }, timeout);
+    
+    socket.setTimeout(timeout);
+    
+    socket.on('data', (data) => {
+      const response = data.toString().trim();
+      responses.push(`${currentStep}: ${response}`);
+      smtpResponse = response;
+      
+      const responseCode = response.substring(0, 3);
+      
+      try {
+        switch (currentStep) {
+          case 'connect':
+            if (responseCode === '220') {
+              currentStep = 'ehlo';
+              socket.write('EHLO validation.check\r\n');
+            } else {
+              cleanup();
+              clearTimeout(timeoutId);
+              resolve({
+                valid: false,
+                response: response,
+                step: currentStep,
+                responses: responses,
+                error: 'CONNECT_FAILED'
+              });
+            }
+            break;
+            
+          case 'ehlo':
+            if (responseCode === '250') {
+              currentStep = 'mail_from';
+              socket.write('MAIL FROM:<test@validation.check>\r\n');
+            } else {
+              cleanup();
+              clearTimeout(timeoutId);
+              resolve({
+                valid: false,
+                response: response,
+                step: currentStep,
+                responses: responses,
+                error: 'EHLO_FAILED'
+              });
+            }
+            break;
+            
+          case 'mail_from':
+            if (responseCode === '250') {
+              currentStep = 'rcpt_to';
+              socket.write(`RCPT TO:<${email}>\r\n`);
+            } else {
+              cleanup();
+              clearTimeout(timeoutId);
+              resolve({
+                valid: false,
+                response: response,
+                step: currentStep,
+                responses: responses,
+                error: 'MAIL_FROM_FAILED'
+              });
+            }
+            break;
+            
+          case 'rcpt_to':
+            currentStep = 'quit';
+            socket.write('QUIT\r\n');
+            
+            // This is the critical response that tells us if the email exists
+            if (responseCode === '250') {
+              cleanup();
+              clearTimeout(timeoutId);
+              resolve({
+                valid: true,
+                response: response,
+                step: 'rcpt_to',
+                responses: responses,
+                error: null
+              });
+            } else {
+              cleanup();
+              clearTimeout(timeoutId);
+              resolve({
+                valid: false,
+                response: response,
+                step: 'rcpt_to',
+                responses: responses,
+                error: 'RCPT_TO_FAILED'
+              });
+            }
+            break;
+            
+          case 'quit':
+            cleanup();
+            clearTimeout(timeoutId);
+            // We already resolved in rcpt_to step
+            break;
+        }
+      } catch (error) {
+        cleanup();
+        clearTimeout(timeoutId);
+        resolve({
+          valid: false,
+          response: `Error processing response: ${error.message}`,
+          step: currentStep,
+          responses: responses,
+          error: 'PROCESSING_ERROR'
+        });
+      }
+    });
+    
+    socket.on('error', (error) => {
+      cleanup();
+      clearTimeout(timeoutId);
+      resolve({
+        valid: false,
+        response: `Socket error: ${error.message}`,
+        step: currentStep,
+        responses: responses,
+        error: 'SOCKET_ERROR'
+      });
+    });
+    
+    socket.on('timeout', () => {
+      cleanup();
+      clearTimeout(timeoutId);
+      resolve({
+        valid: false,
+        response: 'Socket timeout',
+        step: currentStep,
+        responses: responses,
+        error: 'SOCKET_TIMEOUT'
+      });
+    });
+    
+    socket.on('close', () => {
+      cleanup();
+      clearTimeout(timeoutId);
+      // If we reach here without resolving, it means connection was closed unexpectedly
+      resolve({
+        valid: false,
+        response: 'Connection closed unexpectedly',
+        step: currentStep,
+        responses: responses,
+        error: 'CONNECTION_CLOSED'
+      });
+    });
+    
+    // Start the connection
+    try {
+      socket.connect(25, mxRecord);
+    } catch (error) {
+      cleanup();
+      clearTimeout(timeoutId);
+      resolve({
+        valid: false,
+        response: `Connection failed: ${error.message}`,
+        step: 'connect',
+        responses: responses,
+        error: 'CONNECTION_FAILED'
+      });
+    }
+  });
 }
 
 // Check for common domains with known MX records
@@ -245,12 +439,17 @@ exports.checkDuplicate = async (email, listId) => {
 
 // Helper function to classify SMTP response and determine risk level
 function classifySmtpResponse(validationResult) {
-  if (!validationResult || validationResult.valid) {
+  if (!validationResult) {
+    return { risk: 'high', classification: 'error', reason: 'No SMTP validation result' };
+  }
+
+  if (validationResult.valid) {
     return { risk: 'low', classification: 'deliverable', reason: 'SMTP validation passed' };
   }
 
   const reason = validationResult.reason?.toLowerCase() || '';
-  const smtpResponse = validationResult.smtp?.response?.toLowerCase() || '';
+  const smtpResponse = validationResult.response?.toLowerCase() || '';
+  const error = validationResult.error || '';
   
   // High-risk responses that should be marked as invalid
   const highRiskPatterns = [
@@ -272,6 +471,7 @@ function classifySmtpResponse(validationResult) {
     '550 5.4.1', // Recipient address rejected
     '551 5.1.1', // User not local
     '553 5.1.2', // Address rejected
+    'rcpt_to_failed', // Our custom error
   ];
 
   // Medium-risk responses that are risky but might be temporary
@@ -290,6 +490,8 @@ function classifySmtpResponse(validationResult) {
     '450 4.2.2', // Mailbox full
     '452 4.2.2', // Insufficient storage
     '421 4.2.1', // Service not available
+    'ehlo_failed',
+    'mail_from_failed',
   ];
 
   // Low-risk responses that might indicate delivery issues but email exists
@@ -302,40 +504,63 @@ function classifySmtpResponse(validationResult) {
     'service unavailable',
     'connection timeout',
     'smtp timeout',
+    'smtp_timeout',
+    'socket_timeout',
+    'socket_error',
+    'connection_closed',
+    'connect_failed',
   ];
 
   // Check for high-risk patterns
   for (const pattern of highRiskPatterns) {
-    if (reason.includes(pattern) || smtpResponse.includes(pattern)) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern) || error.toLowerCase().includes(pattern)) {
       return {
         risk: 'high',
         classification: 'undeliverable',
         reason: `High-risk SMTP response: ${pattern}`,
-        smtpDetails: { response: smtpResponse, validationReason: reason }
+        smtpDetails: { 
+          response: smtpResponse, 
+          validationReason: reason,
+          error: error,
+          step: validationResult.step,
+          responses: validationResult.responses
+        }
       };
     }
   }
 
   // Check for medium-risk patterns
   for (const pattern of mediumRiskPatterns) {
-    if (reason.includes(pattern) || smtpResponse.includes(pattern)) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern) || error.toLowerCase().includes(pattern)) {
       return {
         risk: 'medium',
         classification: 'risky',
         reason: `Medium-risk SMTP response: ${pattern}`,
-        smtpDetails: { response: smtpResponse, validationReason: reason }
+        smtpDetails: { 
+          response: smtpResponse, 
+          validationReason: reason,
+          error: error,
+          step: validationResult.step,
+          responses: validationResult.responses
+        }
       };
     }
   }
 
   // Check for low-risk patterns
   for (const pattern of lowRiskPatterns) {
-    if (reason.includes(pattern) || smtpResponse.includes(pattern)) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern) || error.toLowerCase().includes(pattern)) {
       return {
         risk: 'low',
         classification: 'unknown',
         reason: `Low-risk SMTP response: ${pattern}`,
-        smtpDetails: { response: smtpResponse, validationReason: reason }
+        smtpDetails: { 
+          response: smtpResponse, 
+          validationReason: reason,
+          error: error,
+          step: validationResult.step,
+          responses: validationResult.responses
+        }
       };
     }
   }
@@ -344,8 +569,14 @@ function classifySmtpResponse(validationResult) {
   return {
     risk: 'medium',
     classification: 'risky',
-    reason: `Unknown SMTP failure: ${reason}`,
-    smtpDetails: { response: smtpResponse, validationReason: reason }
+    reason: `Unknown SMTP failure: ${reason || error || 'Unknown error'}`,
+    smtpDetails: { 
+      response: smtpResponse, 
+      validationReason: reason,
+      error: error,
+      step: validationResult.step,
+      responses: validationResult.responses
+    }
   };
 }
 
@@ -387,20 +618,16 @@ exports.validateEmail = async (email) => {
     // Enhanced validation for known domains with detailed SMTP analysis
     if (knownDomains[normalizedDomain]) {
       try {
-        // Perform comprehensive SMTP check for known domains
-        const validationResult = await validate({
-          email,
-          validateRegex: false, // Already validated above
-          validateMx: false,    // Skip MX - we know it's valid
-          validateTypo: false,  // Skip typo check for known domains
-          validateDisposable: false, // Skip disposable - known domains are trusted
-          validateSMTP: true    // Detailed SMTP check
-        });
-
-        console.log(`SMTP validation result for known domain ${normalizedDomain}:`, validationResult);
+        // Get MX record for custom SMTP check
+        const mxRecord = knownDomains[normalizedDomain][0];
+        
+        // Perform our custom detailed SMTP check
+        const smtpResult = await performDetailedSmtpCheck(email, mxRecord);
+        
+        console.log(`Detailed SMTP validation result for known domain ${normalizedDomain}:`, smtpResult);
 
         // Classify SMTP response for risk assessment
-        const smtpClassification = classifySmtpResponse(validationResult);
+        const smtpClassification = classifySmtpResponse(smtpResult);
 
         // For known domains, be more lenient but still classify risk
         if (smtpClassification.risk === 'high' && smtpClassification.classification === 'undeliverable') {
@@ -422,7 +649,7 @@ exports.validateEmail = async (email) => {
           reason: `Known domain: ${smtpClassification.reason}`,
           riskLevel: smtpClassification.risk,
           classification: smtpClassification.classification,
-          smtpCheck: validationResult.valid ? 'passed' : 'failed',
+          smtpCheck: smtpResult.valid ? 'passed' : 'failed',
           smtpDetails: smtpClassification.smtpDetails
         };
 
@@ -441,15 +668,77 @@ exports.validateEmail = async (email) => {
       }
     }
 
-    // Enhanced validation for unknown domains with stricter SMTP analysis
+    // Enhanced validation for unknown domains (no SMTP - we use our custom implementation)
     const validationResult = await validate({
       email,
       validateRegex: false, // Already validated above
       validateMx: true,
       validateTypo: true,
       validateDisposable: true,
-      validateSMTP: true
+      validateSMTP: false   // Disabled - using our custom SMTP validation
     });
+
+    // If basic validation passes, perform our custom SMTP check
+    if (validationResult.valid) {
+      try {
+        // Get MX records for SMTP check
+        const mxResult = await exports.validateMx(domain);
+        
+        if (mxResult.success && mxResult.mxRecord) {
+          const smtpResult = await performDetailedSmtpCheck(email, mxResult.mxRecord);
+          console.log(`Detailed SMTP validation result for unknown domain ${normalizedDomain}:`, smtpResult);
+          
+          const smtpClassification = classifySmtpResponse(smtpResult);
+          
+          // For unknown domains, reject medium and high-risk emails
+          if (smtpClassification.risk === 'high' || 
+              (smtpClassification.risk === 'medium' && smtpClassification.classification === 'risky')) {
+            return {
+              success: false,
+              isValid: false,
+              reason: `Email failed SMTP risk assessment: ${smtpClassification.reason}`,
+              riskLevel: smtpClassification.risk,
+              classification: smtpClassification.classification,
+              smtpDetails: smtpClassification.smtpDetails
+            };
+          }
+
+          // SMTP passed with acceptable risk
+          return {
+            success: true,
+            isValid: true,
+            status: 'Valid',
+            reason: 'Email passed all validation checks including SMTP',
+            riskLevel: smtpClassification.risk,
+            classification: smtpClassification.classification,
+            smtpCheck: smtpResult.valid ? 'passed' : 'failed',
+            smtpDetails: smtpClassification.smtpDetails
+          };
+        } else {
+          // No MX record found, but basic validation passed
+          return {
+            success: false,
+            isValid: false,
+            reason: 'No valid MX record found for domain',
+            riskLevel: 'high',
+            classification: 'undeliverable'
+          };
+        }
+      } catch (error) {
+        console.error('Custom SMTP validation error:', error);
+        // If our SMTP check fails, fall back to basic validation result
+        return {
+          success: true,
+          isValid: true,
+          status: 'Valid',
+          reason: 'Basic validation passed (SMTP check failed)',
+          riskLevel: 'medium',
+          classification: 'unknown',
+          smtpCheck: 'error',
+          smtpError: error.message
+        };
+      }
+    }
 
     // For unknown domains, apply stricter validation
     if (!validationResult.valid) {
@@ -465,31 +754,15 @@ exports.validateEmail = async (email) => {
       };
     }
 
-    // Additional SMTP risk assessment even for passed validation
-    const smtpClassification = classifySmtpResponse(validationResult);
-
-    // For unknown domains, reject medium and high-risk emails
-    if (smtpClassification.risk === 'high' || 
-        (smtpClassification.risk === 'medium' && smtpClassification.classification === 'risky')) {
-      return {
-        success: false,
-        isValid: false,
-        reason: `Email failed risk assessment: ${smtpClassification.reason}`,
-        riskLevel: smtpClassification.risk,
-        classification: smtpClassification.classification,
-        smtpDetails: smtpClassification.smtpDetails
-      };
-    }
-
-    // All checks passed with acceptable risk level
+    // If we reach here, basic validation passed but we already performed SMTP check above
+    // This should not happen in the normal flow
     return {
       success: true,
       isValid: true,
       status: 'Valid',
-      reason: 'Email passed all validation checks',
-      riskLevel: smtpClassification.risk,
-      classification: smtpClassification.classification,
-      smtpDetails: smtpClassification.smtpDetails
+      reason: 'Email passed basic validation checks',
+      riskLevel: 'low',
+      classification: 'deliverable'
     };
 
   } catch (error) {
