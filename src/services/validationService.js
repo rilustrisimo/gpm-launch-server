@@ -305,7 +305,7 @@ exports.validateEmail = async (email) => {
       validateMx: true,
       validateTypo: true,
       validateDisposable: true,
-      validateSMTP: false
+      validateSMTP: true
     });
 
     if (!validationResult.valid) {
