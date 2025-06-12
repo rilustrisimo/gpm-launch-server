@@ -243,8 +243,114 @@ exports.checkDuplicate = async (email, listId) => {
   }
 };
 
+// Helper function to classify SMTP response and determine risk level
+function classifySmtpResponse(validationResult) {
+  if (!validationResult || validationResult.valid) {
+    return { risk: 'low', classification: 'deliverable', reason: 'SMTP validation passed' };
+  }
+
+  const reason = validationResult.reason?.toLowerCase() || '';
+  const smtpResponse = validationResult.smtp?.response?.toLowerCase() || '';
+  
+  // High-risk responses that should be marked as invalid
+  const highRiskPatterns = [
+    'user unknown',
+    'user not found',
+    'no such user',
+    'recipient unknown',
+    'invalid recipient',
+    'mailbox not found',
+    'mailbox unavailable',
+    'address rejected',
+    'user does not exist',
+    'no mailbox here',
+    'account disabled',
+    'account suspended',
+    'mailbox disabled',
+    'recipient rejected',
+    '550 5.1.1', // User unknown
+    '550 5.4.1', // Recipient address rejected
+    '551 5.1.1', // User not local
+    '553 5.1.2', // Address rejected
+  ];
+
+  // Medium-risk responses that are risky but might be temporary
+  const mediumRiskPatterns = [
+    'mailbox full',
+    'quota exceeded',
+    'insufficient storage',
+    'over quota',
+    'mailbox temporarily disabled',
+    'try again later',
+    'temporary failure',
+    'deferred',
+    'greylist',
+    'rate limit',
+    'too many recipients',
+    '450 4.2.2', // Mailbox full
+    '452 4.2.2', // Insufficient storage
+    '421 4.2.1', // Service not available
+  ];
+
+  // Low-risk responses that might indicate delivery issues but email exists
+  const lowRiskPatterns = [
+    'timeout',
+    'connection refused',
+    'network unreachable',
+    'dns',
+    'mx record',
+    'service unavailable',
+    'connection timeout',
+    'smtp timeout',
+  ];
+
+  // Check for high-risk patterns
+  for (const pattern of highRiskPatterns) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern)) {
+      return {
+        risk: 'high',
+        classification: 'undeliverable',
+        reason: `High-risk SMTP response: ${pattern}`,
+        smtpDetails: { response: smtpResponse, validationReason: reason }
+      };
+    }
+  }
+
+  // Check for medium-risk patterns
+  for (const pattern of mediumRiskPatterns) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern)) {
+      return {
+        risk: 'medium',
+        classification: 'risky',
+        reason: `Medium-risk SMTP response: ${pattern}`,
+        smtpDetails: { response: smtpResponse, validationReason: reason }
+      };
+    }
+  }
+
+  // Check for low-risk patterns
+  for (const pattern of lowRiskPatterns) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern)) {
+      return {
+        risk: 'low',
+        classification: 'unknown',
+        reason: `Low-risk SMTP response: ${pattern}`,
+        smtpDetails: { response: smtpResponse, validationReason: reason }
+      };
+    }
+  }
+
+  // Default to medium risk for unknown SMTP failures
+  return {
+    risk: 'medium',
+    classification: 'risky',
+    reason: `Unknown SMTP failure: ${reason}`,
+    smtpDetails: { response: smtpResponse, validationReason: reason }
+  };
+}
+
 /**
- * Validate a single email - Optimized version
+ * Validate a single email - Enhanced version with advanced SMTP risk classification
  */
 exports.validateEmail = async (email) => {
   if (!email) {
@@ -278,51 +384,62 @@ exports.validateEmail = async (email) => {
       };
     }
     
-    // For known domains, still do SMTP check but skip MX/disposable checks
+    // Enhanced validation for known domains with detailed SMTP analysis
     if (knownDomains[normalizedDomain]) {
       try {
-        // Perform SMTP check for known domains to verify email existence
+        // Perform comprehensive SMTP check for known domains
         const validationResult = await validate({
           email,
           validateRegex: false, // Already validated above
           validateMx: false,    // Skip MX - we know it's valid
           validateTypo: false,  // Skip typo check for known domains
           validateDisposable: false, // Skip disposable - known domains are trusted
-          validateSMTP: true    // Only do SMTP check
+          validateSMTP: true    // Detailed SMTP check
         });
 
-        if (!validationResult.valid && validationResult.reason) {
-          // If SMTP check fails, still consider it valid but note the issue
+        // Classify SMTP response for risk assessment
+        const smtpClassification = classifySmtpResponse(validationResult);
+
+        // For known domains, be more lenient but still classify risk
+        if (smtpClassification.risk === 'high' && smtpClassification.classification === 'undeliverable') {
           return {
-            success: true,
-            isValid: true,
-            status: 'Valid',
-            reason: `Known domain with SMTP issue: ${validationResult.reason}`,
-            smtpCheck: 'failed'
+            success: false,
+            isValid: false,
+            reason: `Known domain but email undeliverable: ${smtpClassification.reason}`,
+            riskLevel: smtpClassification.risk,
+            classification: smtpClassification.classification,
+            smtpDetails: smtpClassification.smtpDetails
           };
         }
 
+        // For medium and low risk, mark as valid but include risk information
         return {
           success: true,
           isValid: true,
           status: 'Valid',
-          reason: 'Known domain with verified SMTP',
-          smtpCheck: 'passed'
+          reason: `Known domain: ${smtpClassification.reason}`,
+          riskLevel: smtpClassification.risk,
+          classification: smtpClassification.classification,
+          smtpCheck: validationResult.valid ? 'passed' : 'failed',
+          smtpDetails: smtpClassification.smtpDetails
         };
+
       } catch (error) {
-        // If SMTP check fails due to timeout/error, still accept known domains
+        // If SMTP check fails due to timeout/error, still accept known domains but mark as unknown risk
         return {
           success: true,
           isValid: true,
           status: 'Valid',
-          reason: 'Known domain (SMTP check failed)',
+          reason: 'Known domain (SMTP check failed due to technical issues)',
+          riskLevel: 'low',
+          classification: 'unknown',
           smtpCheck: 'error',
           smtpError: error.message
         };
       }
     }
 
-    // For unknown domains, do full validation
+    // Enhanced validation for unknown domains with stricter SMTP analysis
     const validationResult = await validate({
       email,
       validateRegex: false, // Already validated above
@@ -332,26 +449,55 @@ exports.validateEmail = async (email) => {
       validateSMTP: true
     });
 
+    // For unknown domains, apply stricter validation
     if (!validationResult.valid) {
+      const smtpClassification = classifySmtpResponse(validationResult);
+      
       return {
         success: false,
         isValid: false,
-        reason: validationResult.reason
+        reason: validationResult.reason,
+        riskLevel: smtpClassification.risk,
+        classification: smtpClassification.classification,
+        smtpDetails: smtpClassification.smtpDetails
       };
     }
 
-    // All checks passed
+    // Additional SMTP risk assessment even for passed validation
+    const smtpClassification = classifySmtpResponse(validationResult);
+
+    // For unknown domains, reject medium and high-risk emails
+    if (smtpClassification.risk === 'high' || 
+        (smtpClassification.risk === 'medium' && smtpClassification.classification === 'risky')) {
+      return {
+        success: false,
+        isValid: false,
+        reason: `Email failed risk assessment: ${smtpClassification.reason}`,
+        riskLevel: smtpClassification.risk,
+        classification: smtpClassification.classification,
+        smtpDetails: smtpClassification.smtpDetails
+      };
+    }
+
+    // All checks passed with acceptable risk level
     return {
       success: true,
       isValid: true,
-      status: 'Valid'
+      status: 'Valid',
+      reason: 'Email passed all validation checks',
+      riskLevel: smtpClassification.risk,
+      classification: smtpClassification.classification,
+      smtpDetails: smtpClassification.smtpDetails
     };
+
   } catch (error) {
     console.error('Email validation error:', error);
     return {
       success: false,
       isValid: false,
-      reason: 'Email validation failed: ' + error.message
+      reason: 'Email validation failed: ' + error.message,
+      riskLevel: 'high',
+      classification: 'error'
     };
   }
 };
