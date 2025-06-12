@@ -858,7 +858,7 @@ function classifySmtpResponse(validationResult) {
 }
 
 /**
- * Validate a single email - Enhanced version with advanced SMTP risk classification
+ * Validate a single email - STRICT VERSION: Always check mailbox existence via SMTP
  */
 exports.validateEmail = async (email) => {
   if (!email) {
@@ -869,7 +869,7 @@ exports.validateEmail = async (email) => {
   }
 
   try {
-    // Basic syntax validation (lightweight check first)
+    // STEP 1: Basic syntax validation (lightweight check first)
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return {
@@ -882,7 +882,7 @@ exports.validateEmail = async (email) => {
     const [localPart, domain] = email.split('@');
     const normalizedDomain = domain.toLowerCase();
 
-    // Check for obvious test/fake emails (more specific patterns)
+    // STEP 2: Check for obvious test/fake emails (immediate rejection)
     const testPatterns = [
       /test.*test/i,           // test123test, testtest, etc.
       /sample.*email/i,        // sample.email, sampleemail
@@ -902,243 +902,288 @@ exports.validateEmail = async (email) => {
         reason: 'Test or system emails are not allowed'
       };
     }
+
+    // STEP 3: Get MX record (use cached for known domains, lookup for unknown)
+    let mxRecord = null;
+    let isKnownDomain = false;
     
-    // Enhanced validation for known domains with detailed SMTP analysis
     if (knownDomains[normalizedDomain]) {
+      // Known domain - use cached MX but still validate the mailbox
+      mxRecord = knownDomains[normalizedDomain][0];
+      isKnownDomain = true;
+      console.log(`Using cached MX record for known domain ${normalizedDomain}: ${mxRecord}`);
+    } else {
+      // Unknown domain - perform full MX lookup and basic validation
+      console.log(`Performing MX lookup for unknown domain: ${normalizedDomain}`);
+      
       try {
-        // Get MX record for custom SMTP check
-        const mxRecord = knownDomains[normalizedDomain][0];
+        const mxResult = await exports.validateMx(normalizedDomain);
         
-        // Perform our custom detailed SMTP check
-        const smtpResult = await performDetailedSmtpCheck(email, mxRecord);
+        if (!mxResult.success) {
+          return {
+            success: false,
+            isValid: false,
+            reason: `No valid MX record found: ${mxResult.message}`,
+            riskLevel: 'high',
+            classification: 'undeliverable',
+            step: 'mx_validation'
+          };
+        }
         
-        console.log(`Detailed SMTP validation result for known domain ${normalizedDomain}:`, smtpResult);
+        mxRecord = mxResult.mxRecord;
+        
+        // For unknown domains, also do basic validation (disposable, typo checks)
+        const basicValidation = await validate({
+          email,
+          validateRegex: false, // Already validated above
+          validateMx: false,    // We already did MX validation above
+          validateTypo: true,
+          validateDisposable: true,
+          validateSMTP: false   // We'll do our own SMTP validation
+        });
 
-        // Classify SMTP response for risk assessment
-        const smtpClassification = classifySmtpResponse(smtpResult);
+        if (!basicValidation.valid) {
+          return {
+            success: false,
+            isValid: false,
+            reason: basicValidation.reason || 'Failed basic validation',
+            riskLevel: 'medium',
+            classification: 'risky',
+            step: 'basic_validation'
+          };
+        }
+        
+      } catch (error) {
+        return {
+          success: false,
+          isValid: false,
+          reason: `MX validation failed: ${error.message}`,
+          riskLevel: 'high',
+          classification: 'error',
+          step: 'mx_validation'
+        };
+      }
+    }
 
-        // Check if SMTP failed due to connectivity issues (timeouts, connection errors)
-        if (!smtpResult.valid && (smtpResult.error === 'SMTP_TIMEOUT' || 
-            smtpResult.error === 'CONNECTION_FAILED' || 
-            smtpResult.error === 'SOCKET_TIMEOUT' || 
-            smtpResult.error === 'CONNECTION_CLOSED')) {
-          
-          console.log(`SMTP connectivity issue detected for ${email}, using fallback validation`);
-          
-          // Use basic validation as fallback for major providers
-          const basicValidation = await validate({
-            email,
-            validateRegex: true,
-            validateMx: true,
-            validateTypo: true,
-            validateDisposable: true,
-            validateSMTP: false
-          });
-          
-          const fallbackResult = await performFallbackValidation(email, basicValidation);
-          
-          if (fallbackResult.valid) {
+    // STEP 4: MANDATORY SMTP MAILBOX CHECK - NO EXCEPTIONS
+    console.log(`🔍 Performing MANDATORY SMTP mailbox check for ${email} using MX: ${mxRecord}`);
+    
+    let smtpResult = null;
+    let smtpClassification = null;
+    
+    try {
+      // Always perform detailed SMTP check to verify mailbox existence
+      smtpResult = await performDetailedSmtpCheck(email, mxRecord, 25, 8000); // 8 second timeout
+      console.log(`SMTP validation result for ${email}:`, {
+        valid: smtpResult.valid,
+        error: smtpResult.error,
+        response: smtpResult.response,
+        step: smtpResult.step
+      });
+      
+      // Classify the SMTP response for risk assessment
+      smtpClassification = classifySmtpResponse(smtpResult);
+      
+    } catch (error) {
+      console.error(`SMTP check failed for ${email}:`, error);
+      smtpResult = {
+        valid: false,
+        error: 'SMTP_CHECK_ERROR',
+        response: error.message,
+        step: 'smtp_error'
+      };
+      smtpClassification = {
+        risk: 'high',
+        classification: 'error',
+        reason: `SMTP check failed: ${error.message}`
+      };
+    }
+
+    // STEP 5: Handle SMTP results - TRY ALTERNATIVE METHODS IF PRIMARY FAILS
+    if (!smtpResult.valid) {
+      const connectivityIssue = (
+        smtpResult.error === 'SMTP_TIMEOUT' || 
+        smtpResult.error === 'CONNECTION_FAILED' || 
+        smtpResult.error === 'SOCKET_TIMEOUT' || 
+        smtpResult.error === 'CONNECTION_CLOSED' ||
+        smtpResult.error === 'SOCKET_ERROR'
+      );
+      
+      if (connectivityIssue) {
+        console.log(`⚠️  Primary SMTP failed for ${email}, trying alternative methods...`);
+        
+        // Try alternative SMTP ports (587, 465, 2525)
+        try {
+          const alternativeResult = await tryAlternativeSmtpPorts(email, mxRecord);
+          if (alternativeResult && alternativeResult.valid) {
+            console.log(`✅ Alternative SMTP port ${alternativeResult.alternativePort} succeeded for ${email}`);
             return {
               success: true,
               isValid: true,
               status: 'Valid',
-              reason: `${fallbackResult.reason} (SMTP unavailable)`,
-              riskLevel: fallbackResult.risk,
+              reason: `Mailbox verified via alternative SMTP port ${alternativeResult.alternativePort}`,
+              riskLevel: 'low',
               classification: 'deliverable',
-              smtpCheck: 'fallback',
-              fallback: true,
-              method: fallbackResult.method,
-              dnsScore: fallbackResult.dnsScore
-            };
-          } else {
-            return {
-              success: false,
-              isValid: false,
-              reason: `${fallbackResult.reason} (SMTP unavailable)`,
-              riskLevel: fallbackResult.risk,
-              classification: 'undeliverable',
-              smtpCheck: 'fallback_failed',
-              fallback: true
+              smtpCheck: 'alternative_port_success',
+              smtpDetails: {
+                port: alternativeResult.alternativePort,
+                response: alternativeResult.response,
+                method: alternativeResult.method
+              }
             };
           }
+        } catch (altError) {
+          console.log(`❌ Alternative SMTP ports also failed for ${email}`);
         }
-
-        // For known domains, only accept if SMTP validation actually passed (no risk)
-        if (!smtpResult.valid || smtpClassification.risk !== 'low') {
-          return {
-            success: false,
-            isValid: false,
-            reason: `Known domain but email validation failed: ${smtpClassification.reason}`,
-            riskLevel: smtpClassification.risk,
-            classification: smtpClassification.classification,
-            smtpDetails: smtpClassification.smtpDetails
-          };
-        }
-
-        // Only mark as valid if SMTP passed and risk is low
-        return {
-          success: true,
-          isValid: true,
-          status: 'Valid',
-          reason: `Known domain: ${smtpClassification.reason}`,
-          riskLevel: smtpClassification.risk,
-          classification: smtpClassification.classification,
-          smtpCheck: 'passed',
-          smtpDetails: smtpClassification.smtpDetails
-        };
-
-      } catch (error) {
-        // If SMTP check fails due to timeout/error, mark as invalid for known domains too
-        return {
-          success: false,
-          isValid: false,
-          reason: 'Known domain but SMTP check failed due to technical issues',
-          riskLevel: 'high',
-          classification: 'error',
-          smtpCheck: 'error',
-          smtpError: error.message
-        };
-      }
-    }
-
-    // Enhanced validation for unknown domains (no SMTP - we use our custom implementation)
-    const validationResult = await validate({
-      email,
-      validateRegex: false, // Already validated above
-      validateMx: true,
-      validateTypo: true,
-      validateDisposable: true,
-      validateSMTP: false   // Disabled - using our custom SMTP validation
-    });
-
-    // If basic validation passes, perform our custom SMTP check
-    if (validationResult.valid) {
-      try {
-        // Get MX records for SMTP check
-        const mxResult = await exports.validateMx(domain);
         
-        if (mxResult.success && mxResult.mxRecord) {
-          const smtpResult = await performDetailedSmtpCheck(email, mxResult.mxRecord);
-          console.log(`Detailed SMTP validation result for unknown domain ${normalizedDomain}:`, smtpResult);
+        // Try DNS-based email capability check (SPF, DMARC, DKIM)
+        try {
+          const dnsValidation = await performDnsEmailValidation(email, normalizedDomain);
+          console.log(`DNS validation for ${email}:`, dnsValidation);
           
-          const smtpClassification = classifySmtpResponse(smtpResult);
-          
-          // Check if SMTP failed due to connectivity issues for unknown domains
-          if (!smtpResult.valid && (smtpResult.error === 'SMTP_TIMEOUT' || 
-              smtpResult.error === 'CONNECTION_FAILED' || 
-              smtpResult.error === 'SOCKET_TIMEOUT' || 
-              smtpResult.error === 'CONNECTION_CLOSED')) {
+          if (dnsValidation.emailCapable && dnsValidation.score >= 2) {
+            console.log(`✅ DNS validation succeeded for ${email} with score ${dnsValidation.score}/3`);
             
-            console.log(`SMTP connectivity issue for unknown domain ${email}, applying strict fallback`);
-            
-            // For unknown domains, we're more strict - only allow if it looks like a major provider
-            const fallbackResult = performFallbackValidation(email, validationResult);
-            
-            if (fallbackResult.valid && fallbackResult.reason === 'MAJOR_PROVIDER_FALLBACK') {
+            // For known domains with good DNS score, accept with medium risk
+            if (isKnownDomain) {
               return {
                 success: true,
                 isValid: true,
                 status: 'Valid',
-                reason: `${fallbackResult.reason} (SMTP unavailable)`,
-                riskLevel: 'medium', // Higher risk for unknown domains
+                reason: `Known domain with strong email capabilities (DNS score: ${dnsValidation.score}/3) - mailbox existence unverified`,
+                riskLevel: 'medium',
                 classification: 'deliverable',
-                smtpCheck: 'fallback',
-                fallback: true
+                smtpCheck: 'dns_fallback_success',
+                dnsValidation: dnsValidation,
+                warning: 'Mailbox existence not verified due to SMTP connectivity issues'
               };
             } else {
-              // For unknown domains with SMTP issues, reject
+              // For unknown domains, still reject even with good DNS score
               return {
                 success: false,
                 isValid: false,
-                reason: 'SMTP validation required for unknown domain but unavailable',
+                reason: `Unknown domain requires SMTP mailbox verification but connectivity failed (DNS score: ${dnsValidation.score}/3)`,
                 riskLevel: 'high',
                 classification: 'unknown',
-                smtpCheck: 'unavailable'
+                smtpCheck: 'dns_insufficient',
+                dnsValidation: dnsValidation
               };
             }
           }
-          
-          // For unknown domains, reject ALL risky emails (high, medium, and low risk)
-          if (smtpClassification.risk !== 'low' || !smtpResult.valid) {
-            return {
-              success: false,
-              isValid: false,
-              reason: `Email failed SMTP validation: ${smtpClassification.reason}`,
-              riskLevel: smtpClassification.risk,
-              classification: smtpClassification.classification,
-              smtpDetails: smtpClassification.smtpDetails
-            };
-          }
-
-          // Only accept if SMTP passed with low risk
+        } catch (dnsError) {
+          console.log(`❌ DNS validation also failed for ${email}`);
+        }
+        
+        // Final decision based on domain type
+        if (isKnownDomain) {
+          // For known major providers, accept with high risk warning
+          console.log(`⚠️  Accepting known domain ${normalizedDomain} with HIGH RISK due to unverified mailbox`);
           return {
             success: true,
             isValid: true,
             status: 'Valid',
-            reason: 'Email passed all validation checks including SMTP',
-            riskLevel: smtpClassification.risk,
-            classification: smtpClassification.classification,
-            smtpCheck: 'passed',
-            smtpDetails: smtpClassification.smtpDetails
+            reason: `Major email provider but mailbox existence could not be verified`,
+            riskLevel: 'high', // HIGH RISK since we couldn't verify mailbox
+            classification: 'unknown',
+            smtpCheck: 'verification_failed',
+            warning: 'MAILBOX EXISTENCE NOT VERIFIED - Use with extreme caution',
+            connectivityIssue: smtpResult.error
           };
         } else {
-          // No MX record found, but basic validation passed
+          // For unknown domains, reject if we can't verify mailbox
+          console.log(`❌ Rejecting unknown domain ${normalizedDomain} - mailbox verification required but failed`);
           return {
             success: false,
             isValid: false,
-            reason: 'No valid MX record found for domain',
+            reason: `Unknown domain requires mailbox verification but SMTP connectivity failed`,
             riskLevel: 'high',
-            classification: 'undeliverable'
+            classification: 'unknown',
+            smtpCheck: 'verification_required',
+            smtpDetails: {
+              error: smtpResult.error,
+              response: smtpResult.response,
+              step: smtpResult.step
+            }
           };
         }
-      } catch (error) {
-        console.error('Custom SMTP validation error:', error);
-        // If our SMTP check fails, mark as invalid
+      } else {
+        // SMTP failed with definitive negative response (user not found, etc.)
+        console.log(`❌ SMTP returned definitive negative response for ${email}`);
         return {
           success: false,
           isValid: false,
-          reason: 'SMTP validation failed due to technical issues',
-          riskLevel: 'high',
-          classification: 'error',
-          smtpCheck: 'error',
-          smtpError: error.message
+          reason: `Mailbox does not exist: ${smtpClassification.reason}`,
+          riskLevel: smtpClassification.risk,
+          classification: smtpClassification.classification,
+          smtpCheck: 'mailbox_not_found',
+          smtpDetails: smtpClassification.smtpDetails
         };
       }
     }
 
-    // For unknown domains, apply stricter validation
-    if (!validationResult.valid) {
-      const smtpClassification = classifySmtpResponse(validationResult);
-      
+    // STEP 6: SMTP validation succeeded - verify risk level
+    if (smtpResult.valid && smtpClassification.risk === 'low') {
+      console.log(`✅ SMTP validation passed for ${email} - mailbox exists and is deliverable`);
+      return {
+        success: true,
+        isValid: true,
+        status: 'Valid',
+        reason: `Mailbox verified and confirmed deliverable: ${smtpClassification.reason}`,
+        riskLevel: smtpClassification.risk,
+        classification: smtpClassification.classification,
+        smtpCheck: 'verified_deliverable',
+        smtpDetails: smtpClassification.smtpDetails
+      };
+    } else if (smtpResult.valid && smtpClassification.risk === 'medium') {
+      // SMTP succeeded but with some concerns
+      if (isKnownDomain) {
+        console.log(`⚠️  SMTP validation passed for known domain ${email} but with medium risk`);
+        return {
+          success: true,
+          isValid: true,
+          status: 'Valid',
+          reason: `Known domain mailbox exists but has delivery concerns: ${smtpClassification.reason}`,
+          riskLevel: smtpClassification.risk,
+          classification: smtpClassification.classification,
+          smtpCheck: 'verified_with_concerns',
+          smtpDetails: smtpClassification.smtpDetails
+        };
+      } else {
+        // For unknown domains, be strict about medium risk
+        console.log(`❌ Rejecting unknown domain ${email} due to medium risk SMTP response`);
+        return {
+          success: false,
+          isValid: false,
+          reason: `Unknown domain with delivery concerns: ${smtpClassification.reason}`,
+          riskLevel: smtpClassification.risk,
+          classification: smtpClassification.classification,
+          smtpCheck: 'delivery_concerns',
+          smtpDetails: smtpClassification.smtpDetails
+        };
+      }
+    } else {
+      // SMTP validation passed but risk is high
+      console.log(`❌ Rejecting ${email} due to high risk SMTP response`);
       return {
         success: false,
         isValid: false,
-        reason: validationResult.reason,
+        reason: `High risk SMTP response: ${smtpClassification.reason}`,
         riskLevel: smtpClassification.risk,
         classification: smtpClassification.classification,
+        smtpCheck: 'high_risk',
         smtpDetails: smtpClassification.smtpDetails
       };
     }
-
-    // If we reach here, basic validation passed but we already performed SMTP check above
-    // This should not happen in the normal flow
-    return {
-      success: true,
-      isValid: true,
-      status: 'Valid',
-      reason: 'Email passed basic validation checks',
-      riskLevel: 'low',
-      classification: 'deliverable'
-    };
 
   } catch (error) {
     console.error('Email validation error:', error);
     return {
       success: false,
       isValid: false,
-      reason: 'Email validation failed: ' + error.message,
+      reason: 'Email validation failed due to technical error: ' + error.message,
       riskLevel: 'high',
-      classification: 'error'
+      classification: 'error',
+      step: 'validation_error'
     };
   }
 };
