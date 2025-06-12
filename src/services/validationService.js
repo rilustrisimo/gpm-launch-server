@@ -506,9 +506,15 @@ function classifySmtpResponse(validationResult) {
     'smtp timeout',
     'smtp_timeout',
     'socket_timeout',
-    'socket_error',
     'connection_closed',
     'connect_failed',
+  ];
+
+  // High-risk socket and connection errors (moved from low-risk)
+  const highRiskConnectionPatterns = [
+    'socket_error',
+    'enotfound',
+    'getaddrinfo enotfound',
   ];
 
   // Check for high-risk patterns
@@ -518,6 +524,24 @@ function classifySmtpResponse(validationResult) {
         risk: 'high',
         classification: 'undeliverable',
         reason: `High-risk SMTP response: ${pattern}`,
+        smtpDetails: { 
+          response: smtpResponse, 
+          validationReason: reason,
+          error: error,
+          step: validationResult.step,
+          responses: validationResult.responses
+        }
+      };
+    }
+  }
+
+  // Check for high-risk connection patterns
+  for (const pattern of highRiskConnectionPatterns) {
+    if (reason.includes(pattern) || smtpResponse.includes(pattern) || error.toLowerCase().includes(pattern)) {
+      return {
+        risk: 'high',
+        classification: 'undeliverable',
+        reason: `High-risk connection error: ${pattern}`,
         smtpDetails: { 
           response: smtpResponse, 
           validationReason: reason,
@@ -629,19 +653,19 @@ exports.validateEmail = async (email) => {
         // Classify SMTP response for risk assessment
         const smtpClassification = classifySmtpResponse(smtpResult);
 
-        // For known domains, be more lenient but still classify risk
-        if (smtpClassification.risk === 'high' && smtpClassification.classification === 'undeliverable') {
+        // For known domains, only accept if SMTP validation actually passed (no risk)
+        if (!smtpResult.valid || smtpClassification.risk !== 'low') {
           return {
             success: false,
             isValid: false,
-            reason: `Known domain but email undeliverable: ${smtpClassification.reason}`,
+            reason: `Known domain but email validation failed: ${smtpClassification.reason}`,
             riskLevel: smtpClassification.risk,
             classification: smtpClassification.classification,
             smtpDetails: smtpClassification.smtpDetails
           };
         }
 
-        // For medium and low risk, mark as valid but include risk information
+        // Only mark as valid if SMTP passed and risk is low
         return {
           success: true,
           isValid: true,
@@ -649,19 +673,18 @@ exports.validateEmail = async (email) => {
           reason: `Known domain: ${smtpClassification.reason}`,
           riskLevel: smtpClassification.risk,
           classification: smtpClassification.classification,
-          smtpCheck: smtpResult.valid ? 'passed' : 'failed',
+          smtpCheck: 'passed',
           smtpDetails: smtpClassification.smtpDetails
         };
 
       } catch (error) {
-        // If SMTP check fails due to timeout/error, still accept known domains but mark as unknown risk
+        // If SMTP check fails due to timeout/error, mark as invalid for known domains too
         return {
-          success: true,
-          isValid: true,
-          status: 'Valid',
-          reason: 'Known domain (SMTP check failed due to technical issues)',
-          riskLevel: 'low',
-          classification: 'unknown',
+          success: false,
+          isValid: false,
+          reason: 'Known domain but SMTP check failed due to technical issues',
+          riskLevel: 'high',
+          classification: 'error',
           smtpCheck: 'error',
           smtpError: error.message
         };
@@ -690,20 +713,19 @@ exports.validateEmail = async (email) => {
           
           const smtpClassification = classifySmtpResponse(smtpResult);
           
-          // For unknown domains, reject medium and high-risk emails
-          if (smtpClassification.risk === 'high' || 
-              (smtpClassification.risk === 'medium' && smtpClassification.classification === 'risky')) {
+          // For unknown domains, reject ALL risky emails (high, medium, and low risk)
+          if (smtpClassification.risk !== 'low' || !smtpResult.valid) {
             return {
               success: false,
               isValid: false,
-              reason: `Email failed SMTP risk assessment: ${smtpClassification.reason}`,
+              reason: `Email failed SMTP validation: ${smtpClassification.reason}`,
               riskLevel: smtpClassification.risk,
               classification: smtpClassification.classification,
               smtpDetails: smtpClassification.smtpDetails
             };
           }
 
-          // SMTP passed with acceptable risk
+          // Only accept if SMTP passed with low risk
           return {
             success: true,
             isValid: true,
@@ -711,7 +733,7 @@ exports.validateEmail = async (email) => {
             reason: 'Email passed all validation checks including SMTP',
             riskLevel: smtpClassification.risk,
             classification: smtpClassification.classification,
-            smtpCheck: smtpResult.valid ? 'passed' : 'failed',
+            smtpCheck: 'passed',
             smtpDetails: smtpClassification.smtpDetails
           };
         } else {
@@ -726,14 +748,13 @@ exports.validateEmail = async (email) => {
         }
       } catch (error) {
         console.error('Custom SMTP validation error:', error);
-        // If our SMTP check fails, fall back to basic validation result
+        // If our SMTP check fails, mark as invalid
         return {
-          success: true,
-          isValid: true,
-          status: 'Valid',
-          reason: 'Basic validation passed (SMTP check failed)',
-          riskLevel: 'medium',
-          classification: 'unknown',
+          success: false,
+          isValid: false,
+          reason: 'SMTP validation failed due to technical issues',
+          riskLevel: 'high',
+          classification: 'error',
           smtpCheck: 'error',
           smtpError: error.message
         };
