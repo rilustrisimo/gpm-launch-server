@@ -85,6 +85,9 @@ const prepareCampaignDataForWorker = (campaign) => {
     id: campaign.id,
     name: campaign.name,
     subject: campaign.subject,
+    sendingMode: campaign.sendingMode || 'normal',
+    emailsPerMinute: campaign.emailsPerMinute,
+    maxConcurrentBatches: campaign.maxConcurrentBatches || 10,
     template: {
       id: campaign.template.id,
       subject: campaign.subject || campaign.template.subject,
@@ -245,7 +248,27 @@ exports.createCampaign = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { name, subject, templateId, contactListId, scheduledFor } = req.body;
+    const { 
+      name, 
+      subject, 
+      templateId, 
+      contactListId, 
+      scheduledFor,
+      sendingMode = 'normal',
+      emailsPerMinute,
+      maxConcurrentBatches = 10
+    } = req.body;
+
+    // Validate turtle send parameters
+    if (sendingMode === 'turtle') {
+      if (!emailsPerMinute || emailsPerMinute < 1 || emailsPerMinute > 600) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'For turtle mode, emailsPerMinute must be between 1 and 600'
+        });
+      }
+    }
 
     // Check if template exists and belongs to user
     const template = await Template.findOne({
@@ -288,7 +311,10 @@ exports.createCampaign = async (req, res) => {
       contactListId,
       totalRecipients: contactList.count,
       status: scheduledFor ? 'scheduled' : 'draft',
-      scheduledFor: scheduledFor || null
+      scheduledFor: scheduledFor || null,
+      sendingMode,
+      emailsPerMinute,
+      maxConcurrentBatches
     }, { transaction });
 
     // Update template usage data

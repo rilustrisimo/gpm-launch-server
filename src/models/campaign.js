@@ -113,6 +113,21 @@ module.exports = (sequelize, DataTypes) => {
     complaints: {
       type: DataTypes.INTEGER,
       defaultValue: 0
+    },
+    sendingMode: {
+      type: DataTypes.ENUM('normal', 'turtle'),
+      defaultValue: 'normal',
+      allowNull: false
+    },
+    emailsPerMinute: {
+      type: DataTypes.INTEGER,
+      defaultValue: null, // null means use system default
+      allowNull: true
+    },
+    maxConcurrentBatches: {
+      type: DataTypes.INTEGER,
+      defaultValue: 10, // normal mode default
+      allowNull: false
     }
   }, {
     sequelize,
@@ -120,4 +135,4 @@ module.exports = (sequelize, DataTypes) => {
   });
   
   return Campaign;
-}; 
+};

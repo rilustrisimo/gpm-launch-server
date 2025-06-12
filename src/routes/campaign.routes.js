@@ -25,7 +25,10 @@ router.post(
     body('subject', 'Subject line is required').notEmpty().trim(),
     body('templateId', 'Template ID is required').notEmpty().isUUID().withMessage('Invalid Template ID format'),
     body('contactListId', 'Contact list ID is required').notEmpty().isUUID().withMessage('Invalid Contact List ID format'),
-    body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
+    body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor'),
+    body('sendingMode').optional().isIn(['normal', 'turtle']).withMessage('Invalid sending mode'),
+    body('emailsPerMinute').optional().isInt({ min: 1, max: 600 }).withMessage('Emails per minute must be between 1 and 600'),
+    body('maxConcurrentBatches').optional().isInt({ min: 1, max: 50 }).withMessage('Max concurrent batches must be between 1 and 50')
   ],
   campaignController.createCampaign
 );
@@ -39,7 +42,10 @@ router.put(
     body('templateId').optional().isUUID().withMessage('Invalid Template ID format'),
     body('contactListId').optional().isUUID().withMessage('Invalid Contact List ID format'),
     body('status').optional().isIn(['draft', 'scheduled', 'sending', 'processing', 'completed', 'stopped']).withMessage('Invalid status value'),
-    body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor')
+    body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor'),
+    body('sendingMode').optional().isIn(['normal', 'turtle']).withMessage('Invalid sending mode'),
+    body('emailsPerMinute').optional().isInt({ min: 1, max: 600 }).withMessage('Emails per minute must be between 1 and 600'),
+    body('maxConcurrentBatches').optional().isInt({ min: 1, max: 50 }).withMessage('Max concurrent batches must be between 1 and 50')
   ],
   campaignController.updateCampaign
 );
