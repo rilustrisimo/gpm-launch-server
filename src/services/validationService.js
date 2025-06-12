@@ -397,6 +397,8 @@ exports.validateEmail = async (email) => {
           validateSMTP: true    // Detailed SMTP check
         });
 
+        console.log(`SMTP validation result for known domain ${normalizedDomain}:`, validationResult);
+
         // Classify SMTP response for risk assessment
         const smtpClassification = classifySmtpResponse(validationResult);
 
