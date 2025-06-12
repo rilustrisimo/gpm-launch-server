@@ -253,7 +253,7 @@ exports.checkDuplicate = async (email, listId) => {
 };
 
 /**
- * Validate a single email
+ * Validate a single email - Optimized version
  */
 exports.validateEmail = async (email) => {
   if (!email) {
@@ -264,7 +264,7 @@ exports.validateEmail = async (email) => {
   }
 
   try {
-    // Basic syntax validation
+    // Basic syntax validation (lightweight check first)
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return {
@@ -275,17 +275,9 @@ exports.validateEmail = async (email) => {
     }
 
     const [localPart, domain] = email.split('@');
+    const normalizedDomain = domain.toLowerCase();
 
-    // Check for disposable email
-    if (disposableEmailDomains.includes(domain.toLowerCase())) {
-      return {
-        success: false,
-        isValid: false,
-        reason: 'Disposable email providers are not allowed'
-      };
-    }
-
-    // Check for test emails
+    // Check for test emails (fast string check)
     const testPatterns = ['test', 'sample', 'example', 'demo', 'dummy', 'temp', 'fake'];
     if (testPatterns.some(pattern => email.toLowerCase().includes(pattern))) {
       return {
@@ -294,11 +286,8 @@ exports.validateEmail = async (email) => {
         reason: 'Test emails are not allowed'
       };
     }
-
-    // Normalize domain to lowercase
-    const normalizedDomain = domain.toLowerCase();
     
-    // Check if it's a known domain with reliable MX records
+    // Early exit for known domains (fastest path for common domains)
     if (knownDomains[normalizedDomain]) {
         return {
             success: true,
@@ -308,10 +297,11 @@ exports.validateEmail = async (email) => {
         };
     }
 
-    // Deep email validation
+    // Use deep email validation (handles regex, MX, disposable, typo checks)
+    // Remove redundant validateRegex since we already did basic check
     const validationResult = await validate({
       email,
-      validateRegex: true,
+      validateRegex: false, // Already validated above
       validateMx: true,
       validateTypo: true,
       validateDisposable: true,
@@ -326,24 +316,7 @@ exports.validateEmail = async (email) => {
       };
     }
 
-    // Check MX records
-    try {
-      const mxRecords = await resolveMx(normalizedDomain);
-      if (!mxRecords || mxRecords.length === 0) {
-        return {
-          success: false,
-          isValid: false,
-          reason: 'No MX records found'
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        isValid: false,
-        reason: `MX check failed: ${error.message}`
-      };
-    }
-
+    // Remove redundant MX check - deep-email-validator already did this
     // All checks passed
     return {
       success: true,
