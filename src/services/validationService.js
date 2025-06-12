@@ -291,8 +291,6 @@ exports.validateEmail = async (email) => {
           validateSMTP: true    // Only do SMTP check
         });
 
-        console.log('SMTP validation result for known domain:', validationResult);
-
         if (!validationResult.valid && validationResult.reason) {
           // If SMTP check fails, still consider it valid but note the issue
           return {
@@ -333,8 +331,6 @@ exports.validateEmail = async (email) => {
       validateDisposable: true,
       validateSMTP: true
     });
-
-    console.log('Full email validation result:', validationResult);
 
     if (!validationResult.valid) {
       return {
@@ -380,11 +376,6 @@ exports.validateBatch = async (emails, listId) => {
         try {
           // Check for duplicates in the same list
           const duplicateCheck = await exports.checkDuplicate(email, listId);
-          console.log('Duplicate check for', email, ':', {
-            success: duplicateCheck.success,
-            isDuplicate: duplicateCheck.isDuplicate,
-            listId
-          });
 
           if (duplicateCheck.success && duplicateCheck.isDuplicate) {
             return {
@@ -397,11 +388,6 @@ exports.validateBatch = async (emails, listId) => {
 
           // Validate email format and other checks
           const result = await exports.validateEmail(email);
-          console.log('Email validation for', email, ':', {
-            success: result.success,
-            isValid: result.isValid,
-            reason: result.reason
-          });
 
           return {
             email,

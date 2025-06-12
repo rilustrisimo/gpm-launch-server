@@ -418,8 +418,11 @@ exports.importContacts = async (req, res) => {
     // Process each contact
     for (const contactData of contacts) {
       try {
+        console.log('Processing contact:', contactData);
         // Check if email is valid using the validation result from the batch
         const validationResult = emailValidationMap.get(contactData.email);
+        
+        console.log('Processing contact:', contactData.email, 'Validation result:', validationResult);
         
         if (!validationResult || !validationResult.success || !validationResult.isValid) {
           results.failed.push({
