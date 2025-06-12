@@ -287,18 +287,51 @@ exports.validateEmail = async (email) => {
       };
     }
     
-    // Early exit for known domains (fastest path for common domains)
+    // For known domains, still do SMTP check but skip MX/disposable checks
     if (knownDomains[normalizedDomain]) {
-        return {
+      try {
+        // Perform SMTP check for known domains to verify email existence
+        const validationResult = await validate({
+          email,
+          validateRegex: false, // Already validated above
+          validateMx: false,    // Skip MX - we know it's valid
+          validateTypo: false,  // Skip typo check for known domains
+          validateDisposable: false, // Skip disposable - known domains are trusted
+          validateSMTP: true    // Only do SMTP check
+        });
+
+        if (!validationResult.valid && validationResult.reason) {
+          // If SMTP check fails, still consider it valid but note the issue
+          return {
             success: true,
             isValid: true,
             status: 'Valid',
-            reason: 'Using cached MX record for known domain'
+            reason: `Known domain with SMTP issue: ${validationResult.reason}`,
+            smtpCheck: 'failed'
+          };
+        }
+
+        return {
+          success: true,
+          isValid: true,
+          status: 'Valid',
+          reason: 'Known domain with verified SMTP',
+          smtpCheck: 'passed'
         };
+      } catch (error) {
+        // If SMTP check fails due to timeout/error, still accept known domains
+        return {
+          success: true,
+          isValid: true,
+          status: 'Valid',
+          reason: 'Known domain (SMTP check failed)',
+          smtpCheck: 'error',
+          smtpError: error.message
+        };
+      }
     }
 
-    // Use deep email validation (handles regex, MX, disposable, typo checks)
-    // Remove redundant validateRegex since we already did basic check
+    // For unknown domains, do full validation
     const validationResult = await validate({
       email,
       validateRegex: false, // Already validated above
@@ -316,7 +349,6 @@ exports.validateEmail = async (email) => {
       };
     }
 
-    // Remove redundant MX check - deep-email-validator already did this
     // All checks passed
     return {
       success: true,
