@@ -1029,7 +1029,7 @@ exports.validateEmail = async (email) => {
           }
         }
         
-        // Try alternative SMTP ports (587, 465, 2525)
+        // Try alternative SMTP ports (587, 465, 2525) for both known and unknown domains
         try {
           const alternativeResult = await tryAlternativeSmtpPorts(email, mxRecord);
           if (alternativeResult && alternativeResult.valid) {
@@ -1129,31 +1129,49 @@ exports.validateEmail = async (email) => {
           }
         }
         
-        // Try DNS-based email capability check (SPF, DMARC, DKIM)
-        try {
-          const dnsValidation = await performDnsEmailValidation(email, normalizedDomain);
-          console.log(`DNS validation for ${email}:`, dnsValidation);
-          
-          if (dnsValidation.emailCapable && dnsValidation.score >= 2) {
-            console.log(`✅ DNS validation succeeded for ${email} with score ${dnsValidation.score}/3`);
+        // Try DNS-based email capability check (SPF, DMARC, DKIM) for ALL unknown domains
+        if (!isKnownDomain) {
+          try {
+            const dnsValidation = await performDnsEmailValidation(email, normalizedDomain);
+            console.log(`DNS validation for ${email}:`, dnsValidation);
             
-            // For unknown domains with good DNS, still require higher standards
-            if (!isKnownDomain) {
-              console.log(`❌ Rejecting unknown domain ${email} - requires SMTP verification but network failed (DNS score: ${dnsValidation.score}/3)`);
+            if (dnsValidation.emailCapable) {
+              console.log(`✅ DNS validation shows email capability for ${email} with score ${dnsValidation.score}/3`);
+              
+              // Check advanced email validation patterns first
+              const advancedValidation = performAdvancedEmailValidation(email);
+              if (!advancedValidation.valid) {
+                console.log(`❌ Unknown domain ${email} failed advanced validation - rejecting suspicious pattern`);
+                return {
+                  success: false,
+                  isValid: false,
+                  reason: `Suspicious email pattern detected: ${advancedValidation.reason}`,
+                  riskLevel: 'high',
+                  classification: 'risky',
+                  smtpCheck: 'suspicious_pattern_rejected',
+                  domainType: 'unknown'
+                };
+              }
+              
+              // Accept unknown domain with DNS email capability - lower threshold for acceptance
+              const riskLevel = dnsValidation.score >= 1 ? 'medium' : 'high';
+              console.log(`✅ Accepting unknown domain ${email} with DNS email capability (score: ${dnsValidation.score}/3, risk: ${riskLevel})`);
               return {
-                success: false,
-                isValid: false,
-                reason: `Unknown domain requires SMTP mailbox verification but network connectivity failed (DNS score: ${dnsValidation.score}/3)`,
-                riskLevel: 'high',
-                classification: 'unknown',
-                smtpCheck: 'verification_required',
+                success: true,
+                isValid: true,
+                status: 'Valid',
+                reason: `Unknown domain with email capability - DNS validation passed (SPF: ${dnsValidation.hasSPF}, DMARC: ${dnsValidation.hasDMARC}, DKIM: ${dnsValidation.hasDKIM})`,
+                riskLevel: riskLevel,
+                classification: 'deliverable',
+                smtpCheck: 'dns_email_capability',
                 dnsValidation: dnsValidation,
-                domainType: 'unknown'
+                domainType: 'unknown',
+                warning: dnsValidation.score < 2 ? 'Moderate DNS email capability - monitor delivery rates' : 'Good DNS email capability'
               };
             }
+          } catch (dnsError) {
+            console.log(`❌ DNS validation also failed for ${email}`);
           }
-        } catch (dnsError) {
-          console.log(`❌ DNS validation also failed for ${email}`);
         }
         
         // Final decision for network connectivity issues
