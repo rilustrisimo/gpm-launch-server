@@ -218,8 +218,6 @@ exports.checkDuplicate = async (email, listId) => {
     };
   }
 
-  console.log('Checking duplicate for email:', email, 'in list:', listId);
-
   try {
     // Use Sequelize to check for duplicates in the same list
     const existingContact = await Contact.findOne({
@@ -230,13 +228,6 @@ exports.checkDuplicate = async (email, listId) => {
         where: listId ? { id: listId } : {},
         required: listId ? true : false
       }]
-    });
-
-    console.log('Duplicate check result:', {
-      email,
-      listId,
-      found: !!existingContact,
-      contactId: existingContact?.id
     });
 
     return {
@@ -300,6 +291,8 @@ exports.validateEmail = async (email) => {
           validateSMTP: true    // Only do SMTP check
         });
 
+        console.log('SMTP validation result for known domain:', validationResult);
+
         if (!validationResult.valid && validationResult.reason) {
           // If SMTP check fails, still consider it valid but note the issue
           return {
@@ -340,6 +333,8 @@ exports.validateEmail = async (email) => {
       validateDisposable: true,
       validateSMTP: true
     });
+
+    console.log('Full email validation result:', validationResult);
 
     if (!validationResult.valid) {
       return {
