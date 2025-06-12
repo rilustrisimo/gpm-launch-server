@@ -47,9 +47,9 @@ async function dnsLookupWithRetry(domain, retries = 3, timeout = 5000) {
 }
 
 // Custom SMTP validation function for detailed responses
-async function performDetailedSmtpCheck(email, mxRecord) {
+async function performDetailedSmtpCheck(email, mxRecord, port = 25, customTimeout = 5000) {
   return new Promise((resolve) => {
-    const timeout = 15000; // 15 second timeout
+    const timeout = customTimeout;
     const [localPart, domain] = email.split('@');
     
     // Create socket connection
@@ -72,7 +72,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
         response: 'Connection timeout',
         step: currentStep,
         responses: responses,
-        error: 'SMTP_TIMEOUT'
+        error: 'SMTP_TIMEOUT',
+        port: port
       });
     }, timeout);
     
@@ -99,7 +100,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
                 response: response,
                 step: currentStep,
                 responses: responses,
-                error: 'CONNECT_FAILED'
+                error: 'CONNECT_FAILED',
+                port: port
               });
             }
             break;
@@ -116,7 +118,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
                 response: response,
                 step: currentStep,
                 responses: responses,
-                error: 'EHLO_FAILED'
+                error: 'EHLO_FAILED',
+                port: port
               });
             }
             break;
@@ -133,7 +136,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
                 response: response,
                 step: currentStep,
                 responses: responses,
-                error: 'MAIL_FROM_FAILED'
+                error: 'MAIL_FROM_FAILED',
+                port: port
               });
             }
             break;
@@ -151,7 +155,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
                 response: response,
                 step: 'rcpt_to',
                 responses: responses,
-                error: null
+                error: null,
+                port: port
               });
             } else {
               cleanup();
@@ -161,7 +166,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
                 response: response,
                 step: 'rcpt_to',
                 responses: responses,
-                error: 'RCPT_TO_FAILED'
+                error: 'RCPT_TO_FAILED',
+                port: port
               });
             }
             break;
@@ -180,7 +186,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
           response: `Error processing response: ${error.message}`,
           step: currentStep,
           responses: responses,
-          error: 'PROCESSING_ERROR'
+          error: 'PROCESSING_ERROR',
+          port: port
         });
       }
     });
@@ -193,7 +200,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
         response: `Socket error: ${error.message}`,
         step: currentStep,
         responses: responses,
-        error: 'SOCKET_ERROR'
+        error: 'SOCKET_ERROR',
+        port: port
       });
     });
     
@@ -205,7 +213,8 @@ async function performDetailedSmtpCheck(email, mxRecord) {
         response: 'Socket timeout',
         step: currentStep,
         responses: responses,
-        error: 'SOCKET_TIMEOUT'
+        error: 'SOCKET_TIMEOUT',
+        port: port
       });
     });
     
@@ -218,13 +227,14 @@ async function performDetailedSmtpCheck(email, mxRecord) {
         response: 'Connection closed unexpectedly',
         step: currentStep,
         responses: responses,
-        error: 'CONNECTION_CLOSED'
+        error: 'CONNECTION_CLOSED',
+        port: port
       });
     });
     
     // Start the connection
     try {
-      socket.connect(25, mxRecord);
+      socket.connect(port, mxRecord);
     } catch (error) {
       cleanup();
       clearTimeout(timeoutId);
@@ -233,9 +243,252 @@ async function performDetailedSmtpCheck(email, mxRecord) {
         response: `Connection failed: ${error.message}`,
         step: 'connect',
         responses: responses,
-        error: 'CONNECTION_FAILED'
+        error: 'CONNECTION_FAILED',
+        port: port
       });
     }
+  });
+}
+
+// DNS-based email validation (checking for email-specific records)
+async function performDnsEmailValidation(email, domain) {
+  try {
+    const [localPart] = email.split('@');
+    
+    // Check for SPF records (indicates the domain sends emails)
+    const txtRecords = await new Promise((resolve, reject) => {
+      dns.resolveTxt(domain, (err, records) => {
+        if (err) resolve([]); // Don't fail on TXT lookup errors
+        else resolve(records);
+      });
+    });
+    
+    const hasSPF = txtRecords.some(record => 
+      record.join('').toLowerCase().includes('v=spf1')
+    );
+    
+    const hasDMARC = txtRecords.some(record => 
+      record.join('').toLowerCase().includes('v=dmarc1')
+    );
+    
+    // Check for DKIM records (another email authentication method)
+    const dkimSelectors = ['default', 'google', 'k1', 'selector1', 'selector2'];
+    let hasDKIM = false;
+    
+    for (const selector of dkimSelectors) {
+      try {
+        await new Promise((resolve, reject) => {
+          dns.resolveTxt(`${selector}._domainkey.${domain}`, (err, records) => {
+            if (!err && records && records.length > 0) {
+              hasDKIM = true;
+            }
+            resolve();
+          });
+        });
+        if (hasDKIM) break;
+      } catch (error) {
+        // Continue checking other selectors
+      }
+    }
+    
+    return {
+      hasSPF,
+      hasDMARC,
+      hasDKIM,
+      emailCapable: hasSPF || hasDMARC || hasDKIM,
+      score: (hasSPF ? 1 : 0) + (hasDMARC ? 1 : 0) + (hasDKIM ? 1 : 0)
+    };
+  } catch (error) {
+    return {
+      hasSPF: false,
+      hasDMARC: false,
+      hasDKIM: false,
+      emailCapable: false,
+      score: 0,
+      error: error.message
+    };
+  }
+}
+
+// Check for catch-all email configuration
+async function checkCatchAllEmail(domain, mxRecord) {
+  try {
+    // Try a random email address to see if the domain accepts all emails
+    const randomEmail = `nonexistent-${Date.now()}@${domain}`;
+    const result = await performDetailedSmtpCheck(randomEmail, mxRecord, 25, 3000);
+    
+    return {
+      isCatchAll: result.valid,
+      response: result.response,
+      reliable: !result.valid // If catch-all is false, SMTP validation is more reliable
+    };
+  } catch (error) {
+    return {
+      isCatchAll: false,
+      response: error.message,
+      reliable: true,
+      error: true
+    };
+  }
+}
+
+// Alternative SMTP validation using different ports (587, 465)
+async function tryAlternativeSmtpPorts(email, mxRecord) {
+  const ports = [587, 465, 2525]; // Common alternative SMTP ports
+  
+  for (const port of ports) {
+    try {
+      const result = await performDetailedSmtpCheck(email, mxRecord, port, 3000); // 3s timeout for alternatives
+      if (result.valid) {
+        return {
+          ...result,
+          alternativePort: port,
+          method: 'alternative_smtp'
+        };
+      }
+    } catch (error) {
+      // Continue to next port
+      continue;
+    }
+  }
+  
+  return null; // No alternative ports worked
+}
+
+// Enhanced email syntax and pattern validation
+function performAdvancedEmailValidation(email) {
+  const [localPart, domain] = email.split('@');
+  
+  // Check for suspicious patterns that might indicate fake emails
+  const suspiciousPatterns = [
+    /^\d+$/, // Only numbers
+    /^[a-z]$/, // Single character
+    /^.{1,2}$/, // Too short (1-2 chars)
+    /^.{65,}$/, // Too long (65+ chars)
+    /\.{2,}/, // Multiple consecutive dots
+    /^\./, // Starts with dot
+    /\.$/, // Ends with dot
+    /[+]{2,}/, // Multiple plus signs
+    /[-]{3,}/, // Multiple consecutive hyphens
+  ];
+  
+  const localPartIsSuspicious = suspiciousPatterns.some(pattern => pattern.test(localPart));
+  
+  return {
+    valid: !localPartIsSuspicious,
+    localPart,
+    domain,
+    suspicious: localPartIsSuspicious,
+    reason: localPartIsSuspicious ? 'Suspicious email pattern detected' : 'Advanced validation passed'
+  };
+}
+
+// Fallback validation for environments with SMTP restrictions
+async function performFallbackValidation(email, validationResult) {
+  const domain = email.split('@')[1].toLowerCase();
+  
+  // First, perform advanced email pattern validation
+  const advancedValidation = performAdvancedEmailValidation(email);
+  if (!advancedValidation.valid) {
+    return {
+      valid: false,
+      risk: 'high',
+      reason: 'SUSPICIOUS_PATTERN',
+      response: advancedValidation.reason,
+      fallback: true
+    };
+  }
+  
+  // Check if it's a known major provider
+  const majorProviders = [
+    'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'live.com',
+    'icloud.com', 'aol.com', 'protonmail.com', 'me.com', 'mac.com',
+    'msn.com', 'comcast.net', 'verizon.net', 'att.net', 'sbcglobal.net'
+  ];
+  
+  if (majorProviders.includes(domain)) {
+    // For major providers, if basic validation passes, try alternative SMTP ports first
+    if (validationResult.valid && 
+        validationResult.validators.regex.valid && 
+        validationResult.validators.mx.valid && 
+        validationResult.validators.disposable.valid) {
+      
+      // Try alternative SMTP validation methods
+      try {
+        const mxRecord = await exports.validateMx(domain);
+        if (mxRecord.success) {
+          // First, try alternative SMTP ports
+          const alternativeResult = await tryAlternativeSmtpPorts(email, mxRecord.mxRecord);
+          if (alternativeResult && alternativeResult.valid) {
+            return {
+              valid: true,
+              risk: 'low',
+              reason: 'ALTERNATIVE_SMTP_SUCCESS',
+              response: `Validated via port ${alternativeResult.alternativePort}`,
+              fallback: true,
+              method: alternativeResult.method
+            };
+          }
+          
+          // If alternative SMTP fails, try DNS-based validation
+          const dnsValidation = await performDnsEmailValidation(email, domain);
+          if (dnsValidation.emailCapable && dnsValidation.score >= 2) {
+            return {
+              valid: true,
+              risk: 'medium',
+              reason: 'DNS_EMAIL_CAPABLE',
+              response: `Domain has email capabilities (SPF: ${dnsValidation.hasSPF}, DMARC: ${dnsValidation.hasDMARC}, DKIM: ${dnsValidation.hasDKIM})`,
+              fallback: true,
+              method: 'dns_validation',
+              dnsScore: dnsValidation.score
+            };
+          }
+        }
+      } catch (error) {
+        // Alternative methods failed, continue to basic fallback
+      }
+      
+      // If alternative SMTP fails, use basic validation with higher risk
+      return {
+        valid: true,
+        risk: 'medium', // Higher risk since we couldn't verify mailbox existence
+        reason: 'MAJOR_PROVIDER_BASIC_FALLBACK',
+        response: `${domain} is major provider but mailbox existence unverified`,
+        fallback: true,
+        warning: 'Mailbox existence not verified due to SMTP restrictions'
+      };
+    }
+  }
+  
+  // For other domains, require stricter validation or fail
+  return {
+    valid: false,
+    risk: 'high',
+    reason: 'SMTP_REQUIRED',
+    response: 'SMTP validation required for unknown domain',
+    fallback: true
+  };
+}
+
+// Check if SMTP port 25 is accessible
+async function testSmtpConnectivity() {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(25, 'gmail-smtp-in.l.google.com');
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, 3000);
+    
+    socket.on('connect', () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(true);
+    });
+    
+    socket.on('error', () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
   });
 }
 
@@ -629,13 +882,24 @@ exports.validateEmail = async (email) => {
     const [localPart, domain] = email.split('@');
     const normalizedDomain = domain.toLowerCase();
 
-    // Check for test emails (fast string check)
-    const testPatterns = ['test', 'sample', 'example', 'demo', 'dummy', 'temp', 'fake'];
-    if (testPatterns.some(pattern => email.toLowerCase().includes(pattern))) {
+    // Check for obvious test/fake emails (more specific patterns)
+    const testPatterns = [
+      /test.*test/i,           // test123test, testtest, etc.
+      /sample.*email/i,        // sample.email, sampleemail
+      /example\.(com|org|net)/i, // example.com, example.org domains
+      /demo.*@/i,              // demo emails
+      /dummy.*@/i,             // dummy emails  
+      /temp.*@/i,              // temp emails
+      /fake.*@/i,              // fake emails
+      /noreply@/i,             // noreply emails
+      /no-reply@/i             // no-reply emails
+    ];
+    
+    if (testPatterns.some(pattern => pattern.test(email))) {
       return {
         success: false,
         isValid: false,
-        reason: 'Test emails are not allowed'
+        reason: 'Test or system emails are not allowed'
       };
     }
     
@@ -652,6 +916,52 @@ exports.validateEmail = async (email) => {
 
         // Classify SMTP response for risk assessment
         const smtpClassification = classifySmtpResponse(smtpResult);
+
+        // Check if SMTP failed due to connectivity issues (timeouts, connection errors)
+        if (!smtpResult.valid && (smtpResult.error === 'SMTP_TIMEOUT' || 
+            smtpResult.error === 'CONNECTION_FAILED' || 
+            smtpResult.error === 'SOCKET_TIMEOUT' || 
+            smtpResult.error === 'CONNECTION_CLOSED')) {
+          
+          console.log(`SMTP connectivity issue detected for ${email}, using fallback validation`);
+          
+          // Use basic validation as fallback for major providers
+          const basicValidation = await validate({
+            email,
+            validateRegex: true,
+            validateMx: true,
+            validateTypo: true,
+            validateDisposable: true,
+            validateSMTP: false
+          });
+          
+          const fallbackResult = await performFallbackValidation(email, basicValidation);
+          
+          if (fallbackResult.valid) {
+            return {
+              success: true,
+              isValid: true,
+              status: 'Valid',
+              reason: `${fallbackResult.reason} (SMTP unavailable)`,
+              riskLevel: fallbackResult.risk,
+              classification: 'deliverable',
+              smtpCheck: 'fallback',
+              fallback: true,
+              method: fallbackResult.method,
+              dnsScore: fallbackResult.dnsScore
+            };
+          } else {
+            return {
+              success: false,
+              isValid: false,
+              reason: `${fallbackResult.reason} (SMTP unavailable)`,
+              riskLevel: fallbackResult.risk,
+              classification: 'undeliverable',
+              smtpCheck: 'fallback_failed',
+              fallback: true
+            };
+          }
+        }
 
         // For known domains, only accept if SMTP validation actually passed (no risk)
         if (!smtpResult.valid || smtpClassification.risk !== 'low') {
@@ -712,6 +1022,41 @@ exports.validateEmail = async (email) => {
           console.log(`Detailed SMTP validation result for unknown domain ${normalizedDomain}:`, smtpResult);
           
           const smtpClassification = classifySmtpResponse(smtpResult);
+          
+          // Check if SMTP failed due to connectivity issues for unknown domains
+          if (!smtpResult.valid && (smtpResult.error === 'SMTP_TIMEOUT' || 
+              smtpResult.error === 'CONNECTION_FAILED' || 
+              smtpResult.error === 'SOCKET_TIMEOUT' || 
+              smtpResult.error === 'CONNECTION_CLOSED')) {
+            
+            console.log(`SMTP connectivity issue for unknown domain ${email}, applying strict fallback`);
+            
+            // For unknown domains, we're more strict - only allow if it looks like a major provider
+            const fallbackResult = performFallbackValidation(email, validationResult);
+            
+            if (fallbackResult.valid && fallbackResult.reason === 'MAJOR_PROVIDER_FALLBACK') {
+              return {
+                success: true,
+                isValid: true,
+                status: 'Valid',
+                reason: `${fallbackResult.reason} (SMTP unavailable)`,
+                riskLevel: 'medium', // Higher risk for unknown domains
+                classification: 'deliverable',
+                smtpCheck: 'fallback',
+                fallback: true
+              };
+            } else {
+              // For unknown domains with SMTP issues, reject
+              return {
+                success: false,
+                isValid: false,
+                reason: 'SMTP validation required for unknown domain but unavailable',
+                riskLevel: 'high',
+                classification: 'unknown',
+                smtpCheck: 'unavailable'
+              };
+            }
+          }
           
           // For unknown domains, reject ALL risky emails (high, medium, and low risk)
           if (smtpClassification.risk !== 'low' || !smtpResult.valid) {
@@ -867,3 +1212,9 @@ exports.validateBatch = async (emails, listId) => {
     };
   }
 };
+
+// Export the connectivity test for external use
+exports.testSmtpConnectivity = testSmtpConnectivity;
+
+// Export performance fallback validation for external use  
+exports.performFallbackValidation = performFallbackValidation;
