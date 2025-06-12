@@ -1044,68 +1044,39 @@ exports.validateEmail = async (email) => {
           if (dnsValidation.emailCapable && dnsValidation.score >= 2) {
             console.log(`✅ DNS validation succeeded for ${email} with score ${dnsValidation.score}/3`);
             
-            // For known domains with good DNS score, accept with medium risk
-            if (isKnownDomain) {
-              return {
-                success: true,
-                isValid: true,
-                status: 'Valid',
-                reason: `Known domain with strong email capabilities (DNS score: ${dnsValidation.score}/3) - mailbox existence unverified`,
-                riskLevel: 'medium',
-                classification: 'deliverable',
-                smtpCheck: 'dns_fallback_success',
-                dnsValidation: dnsValidation,
-                warning: 'Mailbox existence not verified due to SMTP connectivity issues'
-              };
-            } else {
-              // For unknown domains, still reject even with good DNS score
-              return {
-                success: false,
-                isValid: false,
-                reason: `Unknown domain requires SMTP mailbox verification but connectivity failed (DNS score: ${dnsValidation.score}/3)`,
-                riskLevel: 'high',
-                classification: 'unknown',
-                smtpCheck: 'dns_insufficient',
-                dnsValidation: dnsValidation
-              };
-            }
+            // STRICT VALIDATION: Reject ALL domains (known or unknown) without SMTP verification
+            console.log(`❌ Rejecting ${email} - requires SMTP mailbox verification but connectivity failed (DNS score: ${dnsValidation.score}/3)`);
+            return {
+              success: false,
+              isValid: false,
+              reason: `Mailbox verification required but SMTP connectivity failed (DNS score: ${dnsValidation.score}/3)`,
+              riskLevel: 'high',
+              classification: 'unknown',
+              smtpCheck: 'verification_required',
+              dnsValidation: dnsValidation,
+              domainType: isKnownDomain ? 'known' : 'unknown'
+            };
           }
         } catch (dnsError) {
           console.log(`❌ DNS validation also failed for ${email}`);
         }
         
-        // Final decision based on domain type
-        if (isKnownDomain) {
-          // For known major providers, accept with high risk warning
-          console.log(`⚠️  Accepting known domain ${normalizedDomain} with HIGH RISK due to unverified mailbox`);
-          return {
-            success: true,
-            isValid: true,
-            status: 'Valid',
-            reason: `Major email provider but mailbox existence could not be verified`,
-            riskLevel: 'high', // HIGH RISK since we couldn't verify mailbox
-            classification: 'unknown',
-            smtpCheck: 'verification_failed',
-            warning: 'MAILBOX EXISTENCE NOT VERIFIED - Use with extreme caution',
-            connectivityIssue: smtpResult.error
-          };
-        } else {
-          // For unknown domains, reject if we can't verify mailbox
-          console.log(`❌ Rejecting unknown domain ${normalizedDomain} - mailbox verification required but failed`);
-          return {
-            success: false,
-            isValid: false,
-            reason: `Unknown domain requires mailbox verification but SMTP connectivity failed`,
-            riskLevel: 'high',
-            classification: 'unknown',
-            smtpCheck: 'verification_required',
-            smtpDetails: {
-              error: smtpResult.error,
-              response: smtpResult.response,
-              step: smtpResult.step
-            }
-          };
-        }
+        // Final decision: STRICT VALIDATION - Reject ALL domains without SMTP verification
+        console.log(`❌ Rejecting ${email} (${isKnownDomain ? 'known' : 'unknown'} domain) - mailbox verification required but failed`);
+        return {
+          success: false,
+          isValid: false,
+          reason: `Mailbox verification required but SMTP connectivity failed`,
+          riskLevel: 'high',
+          classification: 'unknown',
+          smtpCheck: 'verification_required',
+          domainType: isKnownDomain ? 'known' : 'unknown',
+          smtpDetails: {
+            error: smtpResult.error,
+            response: smtpResult.response,
+            step: smtpResult.step
+          }
+        };
       } else {
         // SMTP failed with definitive negative response (user not found, etc.)
         console.log(`❌ SMTP returned definitive negative response for ${email}`);
@@ -1135,32 +1106,18 @@ exports.validateEmail = async (email) => {
         smtpDetails: smtpClassification.smtpDetails
       };
     } else if (smtpResult.valid && smtpClassification.risk === 'medium') {
-      // SMTP succeeded but with some concerns
-      if (isKnownDomain) {
-        console.log(`⚠️  SMTP validation passed for known domain ${email} but with medium risk`);
-        return {
-          success: true,
-          isValid: true,
-          status: 'Valid',
-          reason: `Known domain mailbox exists but has delivery concerns: ${smtpClassification.reason}`,
-          riskLevel: smtpClassification.risk,
-          classification: smtpClassification.classification,
-          smtpCheck: 'verified_with_concerns',
-          smtpDetails: smtpClassification.smtpDetails
-        };
-      } else {
-        // For unknown domains, be strict about medium risk
-        console.log(`❌ Rejecting unknown domain ${email} due to medium risk SMTP response`);
-        return {
-          success: false,
-          isValid: false,
-          reason: `Unknown domain with delivery concerns: ${smtpClassification.reason}`,
-          riskLevel: smtpClassification.risk,
-          classification: smtpClassification.classification,
-          smtpCheck: 'delivery_concerns',
-          smtpDetails: smtpClassification.smtpDetails
-        };
-      }
+      // STRICT VALIDATION: Reject ALL emails with medium risk SMTP responses
+      console.log(`❌ Rejecting ${email} (${isKnownDomain ? 'known' : 'unknown'} domain) due to medium risk SMTP response`);
+      return {
+        success: false,
+        isValid: false,
+        reason: `Medium risk SMTP response indicates delivery concerns: ${smtpClassification.reason}`,
+        riskLevel: smtpClassification.risk,
+        classification: smtpClassification.classification,
+        smtpCheck: 'delivery_concerns',
+        domainType: isKnownDomain ? 'known' : 'unknown',
+        smtpDetails: smtpClassification.smtpDetails
+      };
     } else {
       // SMTP validation passed but risk is high
       console.log(`❌ Rejecting ${email} due to high risk SMTP response`);
