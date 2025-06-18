@@ -2,7 +2,7 @@ const { Campaign, Template, ContactList, CampaignStat, Contact, User, sequelize 
 const { Op } = require('sequelize');
 const { validationResult } = require('express-validator');
 const schedulerService = require('../services/schedulerService');
-const turtleSendingService = require('../services/turtleSendingService');
+
 const axios = require('axios');
 
 // Worker configuration
@@ -604,14 +604,13 @@ exports.getCampaignStats = async (req, res) => {
         console.log(`Campaign ${campaign.id} is 100% complete (${actualStats.sent}/${actualStats.totalRecipients} sent)`);
       }
       
-      // Scenario 2: For turtle campaigns, check if no more emails are pending and service is not active
+      // Scenario 2: For turtle campaigns, check if no more emails are pending
       else if (campaign.sendingMode === 'turtle' && actualStats.totalRecipients > 0) {
         const pendingEmails = actualStats.totalRecipients - actualStats.sent;
-        const isActivelySending = turtleSendingService.isActivelySending(campaign.id);
         
-        if (pendingEmails === 0 && !isActivelySending) {
+        if (pendingEmails === 0) {
           shouldMarkComplete = true;
-          console.log(`Turtle campaign ${campaign.id} completed - no pending emails and not actively sending`);
+          console.log(`Turtle campaign ${campaign.id} completed - no pending emails`);
         }
       }
       
@@ -630,11 +629,6 @@ exports.getCampaignStats = async (req, res) => {
       await campaign.update({ status: 'completed', updatedAt: new Date() });
       currentStatus = 'completed';
       console.log(`Auto-updated campaign ${campaign.id} status to completed (progress: ${progress}%)`);
-      
-      // For turtle campaigns, ensure the sending service is stopped
-      if (campaign.sendingMode === 'turtle') {
-        await turtleSendingService.stopTurtleSending(campaign.id);
-      }
     }
 
     // Prepare local/computed stats for fallback
@@ -652,15 +646,8 @@ exports.getCampaignStats = async (req, res) => {
     // For active campaigns, try to fetch the latest stats from the worker
     let workerStats = null;
     let workerProgress = null;
-    let turtleStatus = null;
     
-    // Check if this is an active turtle campaign
-    if (campaign.sendingMode === 'turtle' && turtleSendingService.isActivelySending(campaign.id)) {
-      turtleStatus = turtleSendingService.getTurtleStatus(campaign.id);
-      console.log(`Turtle campaign ${campaign.id} is actively sending:`, turtleStatus);
-    }
-    
-    if (['processing', 'sending', 'completed'].includes(currentStatus) && campaign.sendingMode !== 'turtle') {
+    if (['processing', 'sending', 'completed'].includes(currentStatus)) {
       try {
         const workerResponse = await workerClient.get(`/api/campaign/${campaign.id}/status`);
         
@@ -707,12 +694,11 @@ exports.getCampaignStats = async (req, res) => {
         sendingMode: campaign.sendingMode,
         emailsPerMinute: campaign.emailsPerMinute,
         initializedAt: workerStats?.initializedAt,
-        startedAt: workerStats?.startedAt || turtleStatus?.startedAt,
+        startedAt: workerStats?.startedAt,
         completedAt: workerStats?.completedAt
       },
       stats: effectiveStats,
       progress: effectiveProgress,
-      turtleStatus: turtleStatus,
       recipients: recipients.map(r => ({
         id: r.id,
         email: r.contact?.email,
@@ -897,6 +883,10 @@ exports.cancelSchedule = async (req, res) => {
 exports.sendCampaignNow = async (req, res) => {
   const transaction = await sequelize.transaction();
   
+  console.log(`🚀 Starting sendCampaignNow for campaign ${req.params.id}`);
+  console.log(`📊 Worker URL: ${WORKER_URL}`);
+  console.log(`🔑 Worker API Key configured: ${WORKER_API_KEY ? 'YES' : 'NO'}`);
+  
   try {
     const campaign = await Campaign.findOne({
       where: {
@@ -939,76 +929,66 @@ exports.sendCampaignNow = async (req, res) => {
       });
     }
 
-    // For turtle campaigns, create CampaignStat records for tracking
-    if (campaign.sendingMode === 'turtle') {
-      console.log(`Setting up turtle campaign ${campaign.id} with ${campaign.contactList.contacts.length} contacts`);
-      
-      // Check if CampaignStat records already exist (for resume functionality)
-      const existingStats = await CampaignStat.count({
-        where: { campaignId: campaign.id },
-        transaction
-      });
+    // Create CampaignStat records for tracking (for all campaigns)
+    console.log(`� Setting up campaign ${campaign.id} with ${campaign.contactList.contacts.length} contacts (mode: ${campaign.sendingMode || 'normal'})`);
+    
+    // Check if CampaignStat records already exist (for resume functionality)
+    const existingStats = await CampaignStat.count({
+      where: { campaignId: campaign.id },
+      transaction
+    });
 
-      if (existingStats === 0) {
-        // Create CampaignStat records for tracking
-        const campaignStats = campaign.contactList.contacts.map(contact => ({
-          campaignId: campaign.id,
-          contactId: contact.id,
-          sent: false,
-          delivered: false,
-          opened: false,
-          clicked: false,
-          bounced: false,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        }));
+    if (existingStats === 0) {
+      // Create CampaignStat records for tracking
+      const campaignStats = campaign.contactList.contacts.map(contact => ({
+        campaignId: campaign.id,
+        contactId: contact.id,
+        sent: false,
+        delivered: false,
+        opened: false,
+        clicked: false,
+        bounced: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }));
 
-        await CampaignStat.bulkCreate(campaignStats, { transaction });
-        console.log(`Created ${campaignStats.length} CampaignStat records for turtle campaign ${campaign.id}`);
-      } else {
-        console.log(`Found ${existingStats} existing CampaignStat records for campaign ${campaign.id} (resuming)`);
-      }
-
-      // Update campaign status
-      await campaign.update({
-        status: 'sending',
-        sentAt: new Date()
-      }, { transaction });
-
-      await transaction.commit();
-
-      // Start turtle sending process locally (not through worker)
-      turtleSendingService.startTurtleSending(campaign);
-
-      return res.status(200).json({
-        success: true,
-        message: 'Turtle campaign sending started successfully',
-        campaign: {
-          id: campaign.id,
-          name: campaign.name,
-          status: 'sending',
-          sentAt: campaign.sentAt,
-          sendingMode: campaign.sendingMode,
-          emailsPerMinute: campaign.emailsPerMinute
-        }
-      });
+      await CampaignStat.bulkCreate(campaignStats, { transaction });
+      console.log(`� Created ${campaignStats.length} CampaignStat records for campaign ${campaign.id}`);
+    } else {
+      console.log(`� Found ${existingStats} existing CampaignStat records for campaign ${campaign.id} (resuming)`);
     }
+
+    // ALL CAMPAIGNS - Send through worker (including turtle mode)
+    console.log(`⚡ Preparing campaign ${campaign.id} for worker`);
+    console.log(`📧 Campaign details: ${campaign.name}, Mode: ${campaign.sendingMode || 'normal'}, Contacts: ${campaign.contactList.contacts.length}`);
 
     // Prepare campaign data for the worker using our helper function
     const campaignData = prepareCampaignDataForWorker(campaign);
+    console.log(`📦 Campaign data prepared for worker:`, {
+      id: campaignData.id,
+      recipientCount: campaignData.recipients.length,
+      sendingMode: campaignData.sendingMode,
+      emailsPerMinute: campaignData.emailsPerMinute
+    });
 
     try {
+      console.log(`🔄 Step 1: Initializing campaign ${campaign.id} in worker...`);
       // 1. Initialize the campaign in the worker with retry mechanism
       const initResponse = await executeWithRetry(
         () => workerClient.post(`/api/campaign/${campaign.id}/initialize`, campaignData),
         `Initialize campaign ${campaign.id}`
       );
       
+      console.log(`✅ Step 1 Complete: Campaign initialized in worker`, initResponse.data);
+      
+      console.log(`🔄 Step 2: Starting campaign ${campaign.id} in worker...`);
       // 2. Start the campaign processing with retry mechanism
       const startResponse = await executeWithRetry(
         () => workerClient.post(`/api/campaign/${campaign.id}/start`),
         `Start campaign ${campaign.id}`
       );
+
+      console.log(`✅ Step 2 Complete: Campaign started in worker`, startResponse.data);
 
       // Update campaign status in database
       await campaign.update({
@@ -1018,25 +998,34 @@ exports.sendCampaignNow = async (req, res) => {
 
       await transaction.commit();
 
+      console.log(`🎉 Campaign ${campaign.id} successfully started through worker`);
+
       return res.status(200).json({
         success: true,
-        message: 'Campaign sending started successfully',
+        message: `Campaign sending started successfully ${campaign.sendingMode === 'turtle' ? '(turtle mode)' : ''}`,
         campaign: {
           id: campaign.id,
           name: campaign.name,
           status: 'sending',
           sentAt: campaign.sentAt,
-          sendingMode: campaign.sendingMode
+          sendingMode: campaign.sendingMode,
+          emailsPerMinute: campaign.emailsPerMinute
         },
         workerStatus: startResponse.data
       });
     } catch (workerError) {
       await transaction.rollback();
-      console.error('Worker send error:', workerError);
+      console.error(`❌ Worker send error for campaign ${campaign.id}:`, workerError);
+      console.error(`❌ Error details:`, {
+        message: workerError.message,
+        response: workerError.response?.data,
+        status: workerError.response?.status
+      });
       return res.status(500).json({
         success: false,
         message: 'Error sending campaign through worker',
-        error: process.env.NODE_ENV === 'development' ? workerError.message : undefined
+        error: process.env.NODE_ENV === 'development' ? workerError.message : undefined,
+        workerError: workerError.response?.data
       });
     }
   } catch (error) {
@@ -1075,28 +1064,8 @@ exports.stopCampaign = async (req, res) => {
       });
     }
 
-    // Handle turtle campaigns locally
-    if (campaign.sendingMode === 'turtle') {
-      // Stop turtle sending service
-      await turtleSendingService.stopTurtleSending(campaign.id);
-      
-      // Update campaign status in database
-      await campaign.update({
-        status: 'stopped',
-        updatedAt: new Date()
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: 'Turtle campaign stopped successfully',
-        campaign: {
-          id: campaign.id,
-          name: campaign.name,
-          status: 'stopped',
-          sendingMode: campaign.sendingMode
-        }
-      });
-    }
+    // All campaigns (including turtle) go through worker
+    console.log(`🛑 Stopping campaign ${campaign.id} (mode: ${campaign.sendingMode || 'normal'}) via worker`);
 
     try {
       // Stop the campaign in the worker with retry mechanism
@@ -1111,13 +1080,16 @@ exports.stopCampaign = async (req, res) => {
         updatedAt: new Date()
       });
 
+      console.log(`✅ Campaign ${campaign.id} stopped successfully via worker`);
+
       return res.status(200).json({
         success: true,
-        message: 'Campaign stopped successfully',
+        message: `Campaign stopped successfully ${campaign.sendingMode === 'turtle' ? '(turtle mode)' : ''}`,
         campaign: {
           id: campaign.id,
           name: campaign.name,
-          status: 'stopped'
+          status: 'stopped',
+          sendingMode: campaign.sendingMode
         },
         workerStatus: stopResponse.data
       });
