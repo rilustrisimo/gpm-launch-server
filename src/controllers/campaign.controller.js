@@ -594,10 +594,47 @@ exports.getCampaignStats = async (req, res) => {
     
     // Auto-update campaign status if complete
     let currentStatus = campaign.status;
-    if (progress >= 100 && !['completed', 'stopped'].includes(campaign.status)) {
-      await campaign.update({ status: 'completed' });
+    let shouldMarkComplete = false;
+    
+    // Check various completion scenarios
+    if (!['completed', 'stopped'].includes(campaign.status)) {
+      // Scenario 1: Progress is 100% (all emails sent)
+      if (progress >= 100 && actualStats.totalRecipients > 0) {
+        shouldMarkComplete = true;
+        console.log(`Campaign ${campaign.id} is 100% complete (${actualStats.sent}/${actualStats.totalRecipients} sent)`);
+      }
+      
+      // Scenario 2: For turtle campaigns, check if no more emails are pending and service is not active
+      else if (campaign.sendingMode === 'turtle' && actualStats.totalRecipients > 0) {
+        const pendingEmails = actualStats.totalRecipients - actualStats.sent;
+        const isActivelySending = turtleSendingService.isActivelySending(campaign.id);
+        
+        if (pendingEmails === 0 && !isActivelySending) {
+          shouldMarkComplete = true;
+          console.log(`Turtle campaign ${campaign.id} completed - no pending emails and not actively sending`);
+        }
+      }
+      
+      // Scenario 3: Campaign was sending/processing but all contacts have been processed
+      else if (['sending', 'processing'].includes(campaign.status) && actualStats.totalRecipients > 0) {
+        const processedCount = actualStats.sent + actualStats.bounced;
+        if (processedCount >= actualStats.totalRecipients) {
+          shouldMarkComplete = true;
+          console.log(`Campaign ${campaign.id} completed - all contacts processed (${processedCount}/${actualStats.totalRecipients})`);
+        }
+      }
+    }
+    
+    // Update status to completed if any completion scenario is met
+    if (shouldMarkComplete) {
+      await campaign.update({ status: 'completed', updatedAt: new Date() });
       currentStatus = 'completed';
       console.log(`Auto-updated campaign ${campaign.id} status to completed (progress: ${progress}%)`);
+      
+      // For turtle campaigns, ensure the sending service is stopped
+      if (campaign.sendingMode === 'turtle') {
+        await turtleSendingService.stopTurtleSending(campaign.id);
+      }
     }
 
     // Prepare local/computed stats for fallback
