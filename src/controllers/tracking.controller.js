@@ -784,6 +784,97 @@ async function updateContactForCampaignSend(req, res, next) {
   }
 }
 
+/**
+ * Track email open (triggered by tracking pixel)
+ */
+async function trackEmailOpen(req, res) {
+  try {
+    const { campaignId, contactId } = req.params;
+    
+    console.log(`📧 Email open tracked - Campaign: ${campaignId}, Contact: ${contactId}`);
+    
+    // Update CampaignStat record
+    const { CampaignStat } = require('../models');
+    await CampaignStat.update(
+      { 
+        opened: true, 
+        openedAt: new Date() 
+      },
+      { 
+        where: { 
+          campaignId, 
+          contactId 
+        } 
+      }
+    );
+    
+    // Return 1x1 transparent pixel
+    const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    res.set({
+      'Content-Type': 'image/gif',
+      'Content-Length': pixel.length,
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    res.send(pixel);
+  } catch (error) {
+    console.error('Error tracking email open:', error);
+    // Still return pixel even if tracking fails
+    const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    res.set('Content-Type', 'image/gif');
+    res.send(pixel);
+  }
+}
+
+/**
+ * Track email click (redirect to original URL)
+ */
+async function trackEmailClick(req, res) {
+  try {
+    const { campaignId, contactId } = req.params;
+    const { url } = req.query;
+    
+    console.log(`🔗 Email click tracked - Campaign: ${campaignId}, Contact: ${contactId}, URL: ${url}`);
+    
+    // Update CampaignStat record
+    const { CampaignStat } = require('../models');
+    await CampaignStat.update(
+      { 
+        clicked: true, 
+        clickedAt: new Date() 
+      },
+      { 
+        where: { 
+          campaignId, 
+          contactId 
+        } 
+      }
+    );
+    
+    // Redirect to original URL
+    if (url) {
+      res.redirect(url);
+    } else {
+      res.status(400).json({ 
+        success: false, 
+        message: 'No URL provided for redirect' 
+      });
+    }
+  } catch (error) {
+    console.error('Error tracking email click:', error);
+    // Redirect to URL even if tracking fails
+    if (req.query.url) {
+      res.redirect(req.query.url);
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        message: 'Error tracking click' 
+      });
+    }
+  }
+}
+
 module.exports = {
   updateTracking,
   updateBatchTracking,
@@ -791,5 +882,7 @@ module.exports = {
   recordBounce,
   recordComplaint,
   updateCampaignStatus,
-  updateContactForCampaignSend
+  updateContactForCampaignSend,
+  trackEmailOpen,
+  trackEmailClick
 };

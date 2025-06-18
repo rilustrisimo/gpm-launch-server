@@ -20,4 +20,9 @@ router.post('/contacts/complaint', validateApiKey, trackingController.recordComp
 router.post('/campaign/status', validateApiKey, trackingController.updateCampaignStatus);
 router.post('/contact/campaign-send', validateApiKey, trackingController.updateContactForCampaignSend);
 
+// EMAIL TRACKING ENDPOINTS (Public - no auth required)
+// These are accessed by email clients and tracking pixels
+router.get('/open/:campaignId/:contactId', trackingController.trackEmailOpen);
+router.get('/click/:campaignId/:contactId', trackingController.trackEmailClick);
+
 module.exports = router;

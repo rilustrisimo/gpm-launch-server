@@ -69,6 +69,9 @@ module.exports = (sequelize, DataTypes) => {
     },
     clickedAt: {
       type: DataTypes.DATE
+    },
+    bouncedAt: {
+      type: DataTypes.DATE
     }
   }, {
     sequelize,
@@ -76,4 +79,4 @@ module.exports = (sequelize, DataTypes) => {
   });
   
   return CampaignStat;
-}; 
+};
