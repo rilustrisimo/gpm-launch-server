@@ -830,10 +830,10 @@ exports.sendCampaignNow = async (req, res) => {
       });
     }
 
-    if (!['draft', 'scheduled'].includes(campaign.status)) {
+    if (!['draft', 'scheduled', 'stopped'].includes(campaign.status)) {
       return res.status(400).json({
         success: false,
-        message: 'Only draft or scheduled campaigns can be sent immediately'
+        message: 'Only draft, scheduled, or stopped campaigns can be sent immediately'
       });
     }
 
