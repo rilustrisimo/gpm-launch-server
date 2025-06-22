@@ -1258,8 +1258,7 @@ exports.calculateCampaignStats = async (req, res) => {
       const allStats = await CampaignStat.findAll({
         where: { campaignId },
         attributes: [
-          'sent', 'delivered', 'opened', 'clicked', 
-          'bounced', 'unsubscribed', 'complained'
+          'sent', 'delivered', 'opened', 'clicked', 'bounced'
         ]
       });
       
@@ -1270,8 +1269,8 @@ exports.calculateCampaignStats = async (req, res) => {
         opened: allStats.filter(s => s.opened === true).length,
         clicked: allStats.filter(s => s.clicked === true).length,
         bounced: allStats.filter(s => s.bounced === true).length,
-        unsubscribes: allStats.filter(s => s.unsubscribed === true).length,
-        complaints: allStats.filter(s => s.complained === true).length
+        unsubscribes: 0, // Not tracked in CampaignStats table
+        complaints: 0   // Not tracked in CampaignStats table
       };
       
       console.log(`✅ Calculated stats for campaign ${campaignId}:`, calculatedStats);
