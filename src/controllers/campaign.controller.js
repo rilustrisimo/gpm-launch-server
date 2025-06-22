@@ -1229,3 +1229,91 @@ exports.updateCampaignStats = async (req, res) => {
     });
   }
 };
+
+/**
+ * Calculate campaign stats from contact data
+ * Called by worker to get real-time stats from the database
+ */
+exports.calculateCampaignStats = async (req, res) => {
+  try {
+    const { id: campaignId } = req.params;
+    const { contactListId, calculateFromContacts = true } = req.body;
+    
+    console.log(`📊 Calculating stats for campaign ${campaignId} from contacts`);
+    
+    // Find the campaign
+    const campaign = await Campaign.findByPk(campaignId);
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found'
+      });
+    }
+    
+    // Use the campaign's contact list if not provided
+    const listId = contactListId || campaign.contactListId;
+    
+    if (calculateFromContacts) {
+      // Calculate stats directly from CampaignStat records
+      const statsQuery = `
+        SELECT 
+          COUNT(*) as total,
+          COUNT(CASE WHEN sent = true THEN 1 END) as sent,
+          COUNT(CASE WHEN delivered = true THEN 1 END) as delivered,
+          COUNT(CASE WHEN opened = true THEN 1 END) as opened,
+          COUNT(CASE WHEN clicked = true THEN 1 END) as clicked,
+          COUNT(CASE WHEN bounced = true THEN 1 END) as bounced,
+          COUNT(CASE WHEN unsubscribed = true THEN 1 END) as unsubscribes,
+          COUNT(CASE WHEN complained = true THEN 1 END) as complaints
+        FROM CampaignStats 
+        WHERE campaignId = :campaignId
+      `;
+      
+      const [results] = await sequelize.query(statsQuery, {
+        replacements: { campaignId },
+        type: sequelize.QueryTypes.SELECT
+      });
+      
+      const stats = {
+        total: parseInt(results.total) || 0,
+        sent: parseInt(results.sent) || 0,
+        delivered: parseInt(results.delivered) || 0,
+        opened: parseInt(results.opened) || 0,
+        clicked: parseInt(results.clicked) || 0,
+        bounced: parseInt(results.bounced) || 0,
+        unsubscribes: parseInt(results.unsubscribes) || 0,
+        complaints: parseInt(results.complaints) || 0
+      };
+      
+      console.log(`✅ Calculated stats for campaign ${campaignId}:`, stats);
+      
+      return res.json({
+        success: true,
+        stats
+      });
+    }
+    
+    // Fallback to existing campaign stats
+    return res.json({
+      success: true,
+      stats: {
+        total: campaign.totalRecipients || 0,
+        sent: campaign.sent || 0,
+        delivered: campaign.delivered || 0,
+        opened: campaign.opens || 0,
+        clicked: campaign.clicks || 0,
+        bounced: campaign.bounces || 0,
+        unsubscribes: campaign.unsubscribes || 0,
+        complaints: campaign.complaints || 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error calculating campaign stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to calculate campaign stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

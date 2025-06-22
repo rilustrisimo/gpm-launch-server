@@ -5,8 +5,13 @@ const { auth, validateApiKey } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
-// Update campaign stats (called by worker) - uses API key auth
+// Worker-specific endpoints (called by worker) - use API key auth
+// These MUST come before the general auth middleware
 router.put('/:id/stats', validateApiKey, campaignController.updateCampaignStats);
+router.get('/:id/worker-data', validateApiKey, campaignController.getCampaign);
+router.post('/:id/calculate-stats', validateApiKey, campaignController.calculateCampaignStats);
+router.post('/:id/update-recipient', validateApiKey, campaignController.updateRecipient);
+router.post('/:id/update-stats', validateApiKey, campaignController.updateCampaignStats);
 
 // Apply auth middleware to all other routes
 router.use(auth);
