@@ -1254,32 +1254,24 @@ exports.calculateCampaignStats = async (req, res) => {
     const listId = contactListId || campaign.contactListId;
     
     if (calculateFromContacts) {
-      // Calculate stats directly from CampaignStat records using Sequelize
-      const stats = await CampaignStat.findAll({
+      // Calculate stats directly from CampaignStat records using simple Sequelize
+      const allStats = await CampaignStat.findAll({
         where: { campaignId },
         attributes: [
-          [sequelize.fn('COUNT', sequelize.col('*')), 'total'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN sent = true THEN 1 END')), 'sent'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN delivered = true THEN 1 END')), 'delivered'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN opened = true THEN 1 END')), 'opened'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN clicked = true THEN 1 END')), 'clicked'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN bounced = true THEN 1 END')), 'bounced'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN unsubscribed = true THEN 1 END')), 'unsubscribes'],
-          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN complained = true THEN 1 END')), 'complaints']
-        ],
-        raw: true
+          'sent', 'delivered', 'opened', 'clicked', 
+          'bounced', 'unsubscribed', 'complained'
+        ]
       });
       
-      const result = stats[0] || {};
       const calculatedStats = {
-        total: parseInt(result.total) || 0,
-        sent: parseInt(result.sent) || 0,
-        delivered: parseInt(result.delivered) || 0,
-        opened: parseInt(result.opened) || 0,
-        clicked: parseInt(result.clicked) || 0,
-        bounced: parseInt(result.bounced) || 0,
-        unsubscribes: parseInt(result.unsubscribes) || 0,
-        complaints: parseInt(result.complaints) || 0
+        total: allStats.length,
+        sent: allStats.filter(s => s.sent === true).length,
+        delivered: allStats.filter(s => s.delivered === true).length,
+        opened: allStats.filter(s => s.opened === true).length,
+        clicked: allStats.filter(s => s.clicked === true).length,
+        bounced: allStats.filter(s => s.bounced === true).length,
+        unsubscribes: allStats.filter(s => s.unsubscribed === true).length,
+        complaints: allStats.filter(s => s.complained === true).length
       };
       
       console.log(`✅ Calculated stats for campaign ${campaignId}:`, calculatedStats);
