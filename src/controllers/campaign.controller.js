@@ -1254,42 +1254,39 @@ exports.calculateCampaignStats = async (req, res) => {
     const listId = contactListId || campaign.contactListId;
     
     if (calculateFromContacts) {
-      // Calculate stats directly from CampaignStat records
-      const statsQuery = `
-        SELECT 
-          COUNT(*) as total,
-          COUNT(CASE WHEN sent = true THEN 1 END) as sent,
-          COUNT(CASE WHEN delivered = true THEN 1 END) as delivered,
-          COUNT(CASE WHEN opened = true THEN 1 END) as opened,
-          COUNT(CASE WHEN clicked = true THEN 1 END) as clicked,
-          COUNT(CASE WHEN bounced = true THEN 1 END) as bounced,
-          COUNT(CASE WHEN unsubscribed = true THEN 1 END) as unsubscribes,
-          COUNT(CASE WHEN complained = true THEN 1 END) as complaints
-        FROM CampaignStats 
-        WHERE campaignId = :campaignId
-      `;
-      
-      const [results] = await sequelize.query(statsQuery, {
-        replacements: { campaignId },
-        type: sequelize.QueryTypes.SELECT
+      // Calculate stats directly from CampaignStat records using Sequelize
+      const stats = await CampaignStat.findAll({
+        where: { campaignId },
+        attributes: [
+          [sequelize.fn('COUNT', sequelize.col('*')), 'total'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN sent = true THEN 1 END')), 'sent'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN delivered = true THEN 1 END')), 'delivered'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN opened = true THEN 1 END')), 'opened'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN clicked = true THEN 1 END')), 'clicked'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN bounced = true THEN 1 END')), 'bounced'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN unsubscribed = true THEN 1 END')), 'unsubscribes'],
+          [sequelize.fn('COUNT', sequelize.literal('CASE WHEN complained = true THEN 1 END')), 'complaints']
+        ],
+        raw: true
       });
       
-      const stats = {
-        total: parseInt(results.total) || 0,
-        sent: parseInt(results.sent) || 0,
-        delivered: parseInt(results.delivered) || 0,
-        opened: parseInt(results.opened) || 0,
-        clicked: parseInt(results.clicked) || 0,
-        bounced: parseInt(results.bounced) || 0,
-        unsubscribes: parseInt(results.unsubscribes) || 0,
-        complaints: parseInt(results.complaints) || 0
+      const result = stats[0] || {};
+      const calculatedStats = {
+        total: parseInt(result.total) || 0,
+        sent: parseInt(result.sent) || 0,
+        delivered: parseInt(result.delivered) || 0,
+        opened: parseInt(result.opened) || 0,
+        clicked: parseInt(result.clicked) || 0,
+        bounced: parseInt(result.bounced) || 0,
+        unsubscribes: parseInt(result.unsubscribes) || 0,
+        complaints: parseInt(result.complaints) || 0
       };
       
-      console.log(`✅ Calculated stats for campaign ${campaignId}:`, stats);
+      console.log(`✅ Calculated stats for campaign ${campaignId}:`, calculatedStats);
       
       return res.json({
         success: true,
-        stats
+        stats: calculatedStats
       });
     }
     
