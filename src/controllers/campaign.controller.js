@@ -1170,3 +1170,62 @@ exports.updateRecipient = async (req, res) => {
     });
   }
 };
+
+/**
+ * Update campaign stats from calculated values
+ * Called by worker after calculating stats from contacts
+ */
+exports.updateCampaignStats = async (req, res) => {
+  try {
+    const { id: campaignId } = req.params;
+    const { 
+      sent, 
+      delivered, 
+      bounces, 
+      complaints, 
+      unsubscribes, 
+      opens, 
+      clicks 
+    } = req.body;
+    
+    console.log(`📊 Updating campaign stats for campaign ${campaignId}`);
+    
+    // Find the campaign
+    const campaign = await Campaign.findByPk(campaignId);
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found'
+      });
+    }
+    
+    // Prepare update data with only defined values
+    const updateData = {};
+    if (sent !== undefined) updateData.sent = sent;
+    if (delivered !== undefined) updateData.delivered = delivered;
+    if (bounces !== undefined) updateData.bounces = bounces;
+    if (complaints !== undefined) updateData.complaints = complaints;
+    if (unsubscribes !== undefined) updateData.unsubscribes = unsubscribes;
+    if (opens !== undefined) updateData.opens = opens;
+    if (clicks !== undefined) updateData.clicks = clicks;
+    
+    // Update the campaign
+    await campaign.update(updateData);
+    
+    console.log(`✅ Successfully updated campaign stats for campaign ${campaignId}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Campaign stats updated successfully',
+      campaignId,
+      updatedStats: updateData
+    });
+  } catch (error) {
+    console.error('❌ Error updating campaign stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update campaign stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

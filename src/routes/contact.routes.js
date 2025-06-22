@@ -9,6 +9,12 @@ const router = express.Router();
 // Get contact by email (for SES webhook) - uses API key auth
 router.get('/by-email/:email', validateApiKey, contactController.getContactByEmail);
 
+// Update contact tracking (called by worker) - uses API key auth
+router.put('/tracking/:email', validateApiKey, contactController.updateContactTracking);
+
+// Calculate campaign stats from contacts (called by worker) - uses API key auth  
+router.get('/stats/calculate', validateApiKey, contactController.calculateCampaignStats);
+
 // Apply auth middleware to all other routes
 router.use(auth);
 
@@ -93,4 +99,4 @@ router.post(
   contactController.importContacts
 );
 
-module.exports = router; 
+module.exports = router;

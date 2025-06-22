@@ -8,6 +8,66 @@ const { Campaign, Contact, ContactList, ContactListContacts } = require('../mode
 const { createError } = require('../utils/error');
 
 /**
+ * Helper function to recalculate campaign stats from contacts
+ * @param {Object} campaign - Campaign instance
+ */
+async function recalculateCampaignStatsFromContacts(campaign) {
+  try {
+    // Load campaign with contact list if not already loaded
+    if (!campaign.contactList) {
+      await campaign.reload({
+        include: [{
+          model: ContactList,
+          as: 'contactList'
+        }]
+      });
+    }
+    
+    if (!campaign.contactList) {
+      console.warn(`Campaign ${campaign.id} has no contact list associated`);
+      return;
+    }
+    
+    // Get all contacts in the campaign's contact list
+    const contacts = await Contact.findAll({
+      include: [{
+        model: ContactList,
+        as: 'lists',
+        where: { id: campaign.contactList.id },
+        attributes: [],
+        through: { attributes: [] }
+      }],
+      attributes: [
+        'id', 
+        'email', 
+        'hasBounced', 
+        'hasComplained', 
+        'unsubscribed', 
+        'lastOpened', 
+        'lastClicked', 
+        'lastDelivered'
+      ]
+    });
+
+    // Calculate stats
+    const stats = {
+      bounces: contacts.filter(c => c.hasBounced).length,
+      complaints: contacts.filter(c => c.hasComplained).length,
+      unsubscribes: contacts.filter(c => c.unsubscribed).length,
+      delivered: contacts.filter(c => c.lastDelivered).length,
+      opens: contacts.filter(c => c.lastOpened).length,
+      clicks: contacts.filter(c => c.lastClicked).length
+    };
+
+    // Update campaign with calculated stats
+    await campaign.update(stats);
+    console.log(`Recalculated stats for campaign ${campaign.id}:`, stats);
+  } catch (error) {
+    console.error(`Error recalculating campaign stats: ${error.message}`);
+  }
+}
+
+/**
  * Update email tracking data (opens, clicks, etc.)
  */
 async function updateTracking(req, res, next) {
@@ -45,72 +105,49 @@ async function updateTracking(req, res, next) {
     // Update campaign statistics based on tracking event type
     switch (trackingData.type) {
       case 'click':
-        // Update click stats
-        try {
-          await campaign.increment('clicks', { by: 1 });
-        } catch (incrementError) {
-          console.error(`Error incrementing campaign clicks: ${incrementError.message}`);
-          const currentCount = campaign.clicks || 0;
-          await campaign.update({ clicks: currentCount + 1 });
-        }
-        
         // Update contact's last click timestamp, clicked link, and last engagement
         await contact.update({
           lastClicked: trackingData.timestamp || new Date(),
           lastClickedLink: trackingData.link || null,
           lastEngagement: trackingData.timestamp || new Date()
         });
+        
+        // Recalculate and update campaign stats from contacts
+        await recalculateCampaignStatsFromContacts(campaign);
         break;
         
       case 'open':
-        // Update open stats if available (though opens are typically disabled in SES)
-        try {
-          if (campaign.opens !== undefined) {
-            await campaign.increment('opens', { by: 1 });
-          }
-        } catch (incrementError) {
-          console.error(`Error incrementing campaign opens: ${incrementError.message}`);
-          // Continue without failing
-        }
-        
         // Update contact's last open timestamp and last engagement
         await contact.update({
           lastOpened: trackingData.timestamp || new Date(),
           lastEngagement: trackingData.timestamp || new Date()
         });
+        
+        // Recalculate and update campaign stats from contacts
+        await recalculateCampaignStatsFromContacts(campaign);
         break;
         
       case 'delivery':
-        // Update delivery stats
-        try {
-          await campaign.increment('delivered', { by: 1 });
-        } catch (incrementError) {
-          console.error(`Error incrementing campaign delivered: ${incrementError.message}`);
-          const currentCount = campaign.delivered || 0;
-          await campaign.update({ delivered: currentCount + 1 });
-        }
-        
         // Update contact's last delivered timestamp and last engagement
         await contact.update({
           lastDelivered: trackingData.timestamp || new Date(),
           lastEngagement: trackingData.timestamp || new Date()
         });
+        
+        // Recalculate and update campaign stats from contacts
+        await recalculateCampaignStatsFromContacts(campaign);
         break;
         
       case 'send':
-        // Update send stats
-        try {
-          await campaign.increment('sent', { by: 1 });
-        } catch (incrementError) {
-          console.error(`Error incrementing campaign sent: ${incrementError.message}`);
-          const currentCount = campaign.sent || 0;
-          await campaign.update({ sent: currentCount + 1 });
-        }
-        
         // Update contact's last engagement for send events
         await contact.update({
           lastEngagement: trackingData.timestamp || new Date()
         });
+        
+        // For send events, we might want to track this differently
+        // since it's not necessarily stored as a contact field
+        // but we can still recalculate other stats
+        await recalculateCampaignStatsFromContacts(campaign);
         break;
     }
     
@@ -178,29 +215,58 @@ async function updateUnsubscribe(req, res, next) {
       }
     }
     
-    // If campaign ID is provided, record the unsubscribe source
+    // If campaign ID is provided, recalculate and update campaign stats from contacts
     if (campaignId) {
-      console.log(`Updating campaign unsubscribe count for campaign: ${campaignId}`);
+      console.log(`Updating campaign stats from contacts for campaign: ${campaignId}`);
       
-      const campaign = await Campaign.findByPk(campaignId);
-      if (campaign) {
+      const campaign = await Campaign.findByPk(campaignId, {
+        include: [{
+          model: ContactList,
+          as: 'contactList'
+        }]
+      });
+      
+      if (campaign && campaign.contactList) {
         try {
-          // Use increment with explicit field specification
-          await campaign.increment('unsubscribes', { by: 1 });
-          
-          // Reload to get updated values
-          await campaign.reload();
-          console.log(`Successfully incremented unsubscribe count for campaign: ${campaignId}`);
-          console.log(`New unsubscribe count: ${campaign.unsubscribes}`);
-        } catch (incrementError) {
-          console.error(`Error incrementing campaign unsubscribes: ${incrementError.message}`);
-          // Try alternative approach
-          const currentCount = campaign.unsubscribes || 0;
-          await campaign.update({ unsubscribes: currentCount + 1 });
-          console.log(`Fallback: Updated unsubscribe count manually to ${currentCount + 1}`);
+          // Calculate stats from contacts in the campaign's contact list
+          const contacts = await Contact.findAll({
+            include: [{
+              model: ContactList,
+              as: 'lists',
+              where: { id: campaign.contactList.id },
+              attributes: [],
+              through: { attributes: [] }
+            }],
+            attributes: [
+              'id', 
+              'email', 
+              'hasBounced', 
+              'hasComplained', 
+              'unsubscribed', 
+              'lastOpened', 
+              'lastClicked', 
+              'lastDelivered'
+            ]
+          });
+
+          // Calculate stats
+          const stats = {
+            bounces: contacts.filter(c => c.hasBounced).length,
+            complaints: contacts.filter(c => c.hasComplained).length,
+            unsubscribes: contacts.filter(c => c.unsubscribed).length,
+            delivered: contacts.filter(c => c.lastDelivered).length,
+            opens: contacts.filter(c => c.lastOpened).length,
+            clicks: contacts.filter(c => c.lastClicked).length
+          };
+
+          // Update campaign with calculated stats
+          await campaign.update(stats);
+          console.log(`Updated campaign ${campaignId} stats from contacts:`, stats);
+        } catch (statsError) {
+          console.error(`Error calculating stats from contacts: ${statsError.message}`);
         }
       } else {
-        console.log(`Campaign not found: ${campaignId}`);
+        console.log(`Campaign not found or missing contact list: ${campaignId}`);
       }
     }
     
@@ -277,29 +343,59 @@ async function recordBounce(req, res, next) {
       lastEngagement: timestamp || new Date()
     });
     
-    // If messageId contains campaignId, update the campaign bounce counter
+    // If messageId contains campaignId, recalculate and update campaign stats from contacts
     if (messageId && messageId.includes('-campaign-')) {
       try {
         // Extract campaignId from messageId (format depends on how your system formats messageIds)
         const campaignIdMatch = messageId.match(/campaign-([a-f0-9\-]+)/i);
         if (campaignIdMatch && campaignIdMatch[1]) {
           const campaignId = campaignIdMatch[1];
-          const campaign = await Campaign.findByPk(campaignId);
-          if (campaign) {
-            try {
-              await campaign.increment('bounces', { by: 1 });
-              await campaign.reload();
-              console.log(`Incremented bounce count for campaign: ${campaignId}`);
-            } catch (incrementError) {
-              console.error(`Error incrementing campaign bounces: ${incrementError.message}`);
-              const currentCount = campaign.bounces || 0;
-              await campaign.update({ bounces: currentCount + 1 });
-              console.log(`Fallback: Updated bounce count manually to ${currentCount + 1}`);
-            }
+          const campaign = await Campaign.findByPk(campaignId, {
+            include: [{
+              model: ContactList,
+              as: 'contactList'
+            }]
+          });
+          
+          if (campaign && campaign.contactList) {
+            // Calculate stats from contacts in the campaign's contact list
+            const contacts = await Contact.findAll({
+              include: [{
+                model: ContactList,
+                as: 'lists',
+                where: { id: campaign.contactList.id },
+                attributes: [],
+                through: { attributes: [] }
+              }],
+              attributes: [
+                'id', 
+                'email', 
+                'hasBounced', 
+                'hasComplained', 
+                'unsubscribed', 
+                'lastOpened', 
+                'lastClicked', 
+                'lastDelivered'
+              ]
+            });
+
+            // Calculate stats
+            const stats = {
+              bounces: contacts.filter(c => c.hasBounced).length,
+              complaints: contacts.filter(c => c.hasComplained).length,
+              unsubscribes: contacts.filter(c => c.unsubscribed).length,
+              delivered: contacts.filter(c => c.lastDelivered).length,
+              opens: contacts.filter(c => c.lastOpened).length,
+              clicks: contacts.filter(c => c.lastClicked).length
+            };
+
+            // Update campaign with calculated stats
+            await campaign.update(stats);
+            console.log(`Updated campaign ${campaignId} stats from contacts:`, stats);
           }
         }
       } catch (err) {
-        console.error(`Failed to update campaign bounce count: ${err.message}`);
+        console.error(`Failed to update campaign stats from contacts: ${err.message}`);
         // Don't fail the whole request if this fails
       }
     }
@@ -356,29 +452,59 @@ async function recordComplaint(req, res, next) {
       lastEngagement: timestamp || new Date()
     });
     
-    // If messageId contains campaignId, update the campaign complaints counter
+    // If messageId contains campaignId, recalculate and update campaign stats from contacts
     if (messageId && messageId.includes('-campaign-')) {
       try {
         // Extract campaignId from messageId (format depends on how your system formats messageIds)
         const campaignIdMatch = messageId.match(/campaign-([a-f0-9\-]+)/i);
         if (campaignIdMatch && campaignIdMatch[1]) {
           const campaignId = campaignIdMatch[1];
-          const campaign = await Campaign.findByPk(campaignId);
-          if (campaign) {
-            try {
-              await campaign.increment('complaints', { by: 1 });
-              await campaign.reload();
-              console.log(`Incremented complaint count for campaign: ${campaignId}`);
-            } catch (incrementError) {
-              console.error(`Error incrementing campaign complaints: ${incrementError.message}`);
-              const currentCount = campaign.complaints || 0;
-              await campaign.update({ complaints: currentCount + 1 });
-              console.log(`Fallback: Updated complaint count manually to ${currentCount + 1}`);
-            }
+          const campaign = await Campaign.findByPk(campaignId, {
+            include: [{
+              model: ContactList,
+              as: 'contactList'
+            }]
+          });
+          
+          if (campaign && campaign.contactList) {
+            // Calculate stats from contacts in the campaign's contact list
+            const contacts = await Contact.findAll({
+              include: [{
+                model: ContactList,
+                as: 'lists',
+                where: { id: campaign.contactList.id },
+                attributes: [],
+                through: { attributes: [] }
+              }],
+              attributes: [
+                'id', 
+                'email', 
+                'hasBounced', 
+                'hasComplained', 
+                'unsubscribed', 
+                'lastOpened', 
+                'lastClicked', 
+                'lastDelivered'
+              ]
+            });
+
+            // Calculate stats
+            const stats = {
+              bounces: contacts.filter(c => c.hasBounced).length,
+              complaints: contacts.filter(c => c.hasComplained).length,
+              unsubscribes: contacts.filter(c => c.unsubscribed).length,
+              delivered: contacts.filter(c => c.lastDelivered).length,
+              opens: contacts.filter(c => c.lastOpened).length,
+              clicks: contacts.filter(c => c.lastClicked).length
+            };
+
+            // Update campaign with calculated stats
+            await campaign.update(stats);
+            console.log(`Updated campaign ${campaignId} stats from contacts:`, stats);
           }
         }
       } catch (err) {
-        console.error(`Failed to update campaign complaint count: ${err.message}`);
+        console.error(`Failed to update campaign stats from contacts: ${err.message}`);
         // Don't fail the whole request if this fails
       }
     }
@@ -793,7 +919,17 @@ async function trackEmailOpen(req, res) {
     
     console.log(`📧 Email open tracked - Campaign: ${campaignId}, Contact: ${contactId}`);
     
-    // Update CampaignStat record
+    // Update contact tracking fields
+    const contact = await Contact.findByPk(contactId);
+    if (contact) {
+      await contact.update({
+        lastOpened: new Date(),
+        lastEngagement: new Date()
+      });
+      console.log(`Updated contact ${contactId} open tracking`);
+    }
+    
+    // Update CampaignStat record for backward compatibility
     const { CampaignStat } = require('../models');
     await CampaignStat.update(
       { 
@@ -807,6 +943,12 @@ async function trackEmailOpen(req, res) {
         } 
       }
     );
+    
+    // Recalculate campaign stats from contacts
+    const campaign = await Campaign.findByPk(campaignId);
+    if (campaign) {
+      await recalculateCampaignStatsFromContacts(campaign);
+    }
     
     // Return 1x1 transparent pixel
     const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
@@ -837,7 +979,18 @@ async function trackEmailClick(req, res) {
     
     console.log(`🔗 Email click tracked - Campaign: ${campaignId}, Contact: ${contactId}, URL: ${url}`);
     
-    // Update CampaignStat record
+    // Update contact tracking fields
+    const contact = await Contact.findByPk(contactId);
+    if (contact) {
+      await contact.update({
+        lastClicked: new Date(),
+        lastClickedLink: url || null,
+        lastEngagement: new Date()
+      });
+      console.log(`Updated contact ${contactId} click tracking`);
+    }
+    
+    // Update CampaignStat record for backward compatibility
     const { CampaignStat } = require('../models');
     await CampaignStat.update(
       { 
@@ -851,6 +1004,12 @@ async function trackEmailClick(req, res) {
         } 
       }
     );
+    
+    // Recalculate campaign stats from contacts
+    const campaign = await Campaign.findByPk(campaignId);
+    if (campaign) {
+      await recalculateCampaignStatsFromContacts(campaign);
+    }
     
     // Redirect to original URL
     if (url) {

@@ -1,11 +1,14 @@
 const express = require('express');
 const { body } = require('express-validator');
 const campaignController = require('../controllers/campaign.controller');
-const { auth } = require('../middleware/auth.middleware');
+const { auth, validateApiKey } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
-// Apply auth middleware to all routes
+// Update campaign stats (called by worker) - uses API key auth
+router.put('/:id/stats', validateApiKey, campaignController.updateCampaignStats);
+
+// Apply auth middleware to all other routes
 router.use(auth);
 
 // Get all campaigns

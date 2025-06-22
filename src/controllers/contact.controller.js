@@ -603,3 +603,164 @@ exports.getContactByEmail = async (req, res) => {
     });
   }
 };
+
+// Update contact tracking status (called by worker)
+exports.updateContactTracking = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { 
+      hasBounced, 
+      hasComplained, 
+      unsubscribed, 
+      lastOpened, 
+      lastClicked, 
+      lastDelivered, 
+      lastClickedLink,
+      bounceType,
+      complaintType 
+    } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email parameter is required'
+      });
+    }
+
+    // Find contact by email
+    const contact = await Contact.findOne({
+      where: { email: email.toLowerCase() }
+    });
+
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found'
+      });
+    }
+
+    // Prepare update data
+    const updateData = {};
+    
+    if (hasBounced !== undefined) {
+      updateData.hasBounced = hasBounced;
+      if (hasBounced) {
+        updateData.lastBouncedAt = new Date();
+        if (bounceType) updateData.bounceType = bounceType;
+      }
+    }
+    
+    if (hasComplained !== undefined) {
+      updateData.hasComplained = hasComplained;
+      if (hasComplained) {
+        updateData.lastComplainedAt = new Date();
+        if (complaintType) updateData.complaintType = complaintType;
+      }
+    }
+    
+    if (unsubscribed !== undefined) {
+      updateData.unsubscribed = unsubscribed;
+      if (unsubscribed) {
+        updateData.unsubscribedAt = new Date();
+        updateData.status = 'unsubscribed';
+      }
+    }
+    
+    if (lastOpened) updateData.lastOpened = new Date(lastOpened);
+    if (lastClicked) updateData.lastClicked = new Date(lastClicked);
+    if (lastDelivered) updateData.lastDelivered = new Date(lastDelivered);
+    if (lastClickedLink) updateData.lastClickedLink = lastClickedLink;
+
+    // Update contact
+    await contact.update(updateData);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Contact tracking updated successfully',
+      contact: {
+        id: contact.id,
+        email: contact.email,
+        hasBounced: contact.hasBounced,
+        hasComplained: contact.hasComplained,
+        unsubscribed: contact.unsubscribed,
+        lastOpened: contact.lastOpened,
+        lastClicked: contact.lastClicked,
+        lastDelivered: contact.lastDelivered
+      }
+    });
+  } catch (error) {
+    console.error('Update contact tracking error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating contact tracking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Calculate campaign stats from contacts (called by worker)
+exports.calculateCampaignStats = async (req, res) => {
+  try {
+    const { campaignId, contactListId } = req.query;
+    
+    if (!campaignId && !contactListId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Either campaignId or contactListId is required'
+      });
+    }
+
+    let whereClause = {};
+    let includeClause = [];
+
+    if (contactListId) {
+      // Calculate stats for contacts in a specific contact list
+      includeClause.push({
+        model: ContactList,
+        as: 'lists',
+        where: { id: contactListId },
+        attributes: [],
+        through: { attributes: [] }
+      });
+    }
+
+    // Get all contacts with their tracking data
+    const contacts = await Contact.findAll({
+      where: whereClause,
+      include: includeClause,
+      attributes: [
+        'id', 
+        'email', 
+        'hasBounced', 
+        'hasComplained', 
+        'unsubscribed', 
+        'lastOpened', 
+        'lastClicked', 
+        'lastDelivered'
+      ]
+    });
+
+    // Calculate stats
+    const stats = {
+      total: contacts.length,
+      delivered: contacts.filter(c => c.lastDelivered).length,
+      bounced: contacts.filter(c => c.hasBounced).length,
+      complained: contacts.filter(c => c.hasComplained).length,
+      unsubscribed: contacts.filter(c => c.unsubscribed).length,
+      opened: contacts.filter(c => c.lastOpened).length,
+      clicked: contacts.filter(c => c.lastClicked).length
+    };
+
+    return res.status(200).json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('Calculate campaign stats error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error calculating campaign stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
