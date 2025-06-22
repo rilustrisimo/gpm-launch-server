@@ -8,7 +8,7 @@ const router = express.Router();
 // Worker-specific endpoints (called by worker) - use API key auth
 // These MUST come before the general auth middleware
 router.put('/:id/stats', validateApiKey, campaignController.updateCampaignStats);
-router.get('/:id/worker-data', validateApiKey, campaignController.getCampaign);
+router.get('/:id/worker-data', validateApiKey, campaignController.getCampaignForWorker);
 router.post('/:id/calculate-stats', validateApiKey, campaignController.calculateCampaignStats);
 router.post('/:id/update-recipient', validateApiKey, campaignController.updateRecipient);
 router.post('/:id/update-stats', validateApiKey, campaignController.updateCampaignStats);

@@ -1305,3 +1305,44 @@ exports.calculateCampaignStats = async (req, res) => {
     });
   }
 };
+
+/**
+ * Get campaign data for worker (no user context required)
+ * Called by worker with API key authentication
+ */
+exports.getCampaignForWorker = async (req, res) => {
+  try {
+    const campaign = await Campaign.findByPk(req.params.id, {
+      include: [
+        {
+          model: Template,
+          as: 'template',
+          attributes: { exclude: ['createdAt', 'updatedAt'] }
+        },
+        {
+          model: ContactList,
+          as: 'contactList',
+          attributes: { exclude: ['createdAt', 'updatedAt'] }
+        }
+      ]
+    });
+
+    if (!campaign) {
+      return res.status(404).json({
+        success: false,
+        message: 'Campaign not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      campaign
+    });
+  } catch (error) {
+    console.error('❌ Error retrieving campaign for worker:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving campaign'
+    });
+  }
+};
