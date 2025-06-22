@@ -174,8 +174,12 @@ async function updateUnsubscribe(req, res, next) {
     // Find the contact by email
     const contact = await Contact.findOne({ where: { email: email.toLowerCase() } });
     if (!contact) {
-      console.log(`Contact not found for email: ${email}`);
-      return next(createError('Contact not found', 404));
+      console.log(`Unsubscribe received for non-existent contact: ${email}`);
+      return res.status(200).json({ 
+        success: true, 
+        warning: 'Contact not found in database, but unsubscribe recorded in logs',
+        contactExists: false
+      });
     }
     
     console.log(`Found contact: ${contact.id} (${contact.email})`);
