@@ -1110,3 +1110,63 @@ exports.stopCampaign = async (req, res) => {
     });
   }
 };
+
+/**
+ * Update individual recipient status in CampaignStats
+ * Called by worker after each email send to keep database in sync
+ */
+exports.updateRecipient = async (req, res) => {
+  try {
+    const { id: campaignId } = req.params;
+    const { contactId, sent, sentAt, delivered, deliveredAt, messageId } = req.body;
+    
+    console.log(`📊 Updating recipient ${contactId} for campaign ${campaignId}`);
+    
+    // Validate required parameters
+    if (!contactId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Contact ID is required'
+      });
+    }
+    
+    // Update the CampaignStat record
+    const [updatedRows] = await CampaignStat.update({
+      sent: sent !== undefined ? sent : false,
+      sentAt: sentAt || null,
+      delivered: delivered !== undefined ? delivered : false,
+      deliveredAt: deliveredAt || null,
+      messageId: messageId || null,
+      updatedAt: new Date()
+    }, {
+      where: { 
+        campaignId, 
+        contactId 
+      }
+    });
+    
+    if (updatedRows === 0) {
+      console.warn(`⚠️ No CampaignStat record found for campaign ${campaignId}, contact ${contactId}`);
+      return res.status(404).json({
+        success: false,
+        message: 'CampaignStat record not found'
+      });
+    }
+    
+    console.log(`✅ Successfully updated recipient ${contactId} in database`);
+    
+    res.json({ 
+      success: true, 
+      updated: true,
+      campaignId,
+      contactId
+    });
+  } catch (error) {
+    console.error('❌ Error updating recipient:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update recipient',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

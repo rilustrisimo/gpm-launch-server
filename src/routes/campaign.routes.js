@@ -71,4 +71,7 @@ router.post('/:id/cancel-schedule', campaignController.cancelSchedule);
 // Send campaign immediately
 router.post('/:id/send-now', campaignController.sendCampaignNow);
 
+// Update individual recipient status (called by worker)
+router.post('/:id/update-recipient', campaignController.updateRecipient);
+
 module.exports = router;
