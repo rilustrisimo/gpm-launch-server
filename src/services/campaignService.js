@@ -1,5 +1,6 @@
 // filepath: /Users/eyorsogood/Sites/launch.gravitypointmedia.com/server/src/services/campaignService.js
-const { Campaign, ContactList, Template } = require('../models');
+const { Campaign, ContactList, Template, Contact } = require('../models');
+const { Op } = require('sequelize');
 
 /**
  * Campaign Service - Handles business logic for email campaigns and 
@@ -101,8 +102,8 @@ class CampaignService {
         throw createError('Template not found', 404);
       }
       
-      // Fetch contacts for this list
-      const contacts = await contactList.getContacts();
+      // Fetch contacts for this list - only fresh ones
+      const contacts = await this.getFreshContacts(campaign.contactListId);
       
       // Filter out unsubscribed contacts
       const activeContacts = await this.filterUnsubscribedContacts(contacts);
@@ -165,6 +166,43 @@ class CampaignService {
       
       if (error.status) throw error;
       throw createError('Failed to send campaign', 500, error);
+    }
+  }
+
+  /**
+   * Get fresh contacts for a contact list (those with lastEngagement = NULL and status = 'active')
+   * This ensures that when restarting a campaign, only previously unengaged contacts are sent
+   */
+  async getFreshContacts(contactListId) {
+    try {
+      // First verify the contact list exists
+      const contactList = await ContactList.findByPk(contactListId);
+      if (!contactList) {
+        throw createError('Contact list not found', 404);
+      }
+
+      // Use Sequelize to find contacts with proper many-to-many filtering
+      const freshContacts = await Contact.findAll({
+        include: [{
+          model: ContactList,
+          as: 'lists',
+          where: { id: contactListId },
+          through: { 
+            attributes: [] // Exclude junction table attributes from results
+          }
+        }],
+        where: {
+          [Op.and]: [
+            { lastEngagement: { [Op.is]: null } },
+            { status: 'active' }
+          ]
+        }
+      });
+
+      return freshContacts;
+    } catch (error) {
+      if (error.status) throw error;
+      throw createError('Failed to fetch fresh contacts', 500, error);
     }
   }
 
