@@ -33,8 +33,8 @@ class CampaignService {
       const campaign = await Campaign.findOne({
         where: { id: campaignId, userId },
         include: [
-          { model: Template },
-          { model: ContactList }
+          { model: Template, as: 'template' },
+          { model: ContactList, as: 'contactList' }
         ]
       });
       
