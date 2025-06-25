@@ -1,5 +1,5 @@
 // filepath: /Users/eyorsogood/Sites/launch.gravitypointmedia.com/server/src/services/campaignService.js
-const { Campaign, ContactList, Template, Contact } = require('../models');
+const { Campaign, ContactList, Template, Contact, CampaignStat } = require('../models');
 const { Op } = require('sequelize');
 
 /**
@@ -26,7 +26,75 @@ class CampaignService {
   }
 
   /**
-   * Get campaign by ID
+   * Recalculate campaign stats from CampaignStat records and update the campaign
+   */
+  async recalculateCampaignStats(campaignId) {
+    try {
+      // Get all campaign stats for this campaign
+      const stats = await CampaignStat.findAll({
+        where: { campaignId }
+      });
+
+      // Calculate aggregated stats
+      const sent = stats.filter(stat => stat.sent).length;
+      const delivered = stats.filter(stat => stat.delivered).length;
+      const opens = stats.filter(stat => stat.opened).length;
+      const clicks = stats.filter(stat => stat.clicked).length;
+      const bounces = stats.filter(stat => stat.bounced).length;
+
+      // Get unsubscribes and complaints from contacts
+      // We need to join with contacts to get unsubscribes and complaints
+      // since these are tracked on the Contact model, not CampaignStat
+      const contactIds = stats.map(stat => stat.contactId);
+      const contacts = await Contact.findAll({
+        where: {
+          id: { [Op.in]: contactIds }
+        }
+      });
+
+      const unsubscribes = contacts.filter(contact => contact.unsubscribed).length;
+      const complaints = contacts.filter(contact => contact.hasComplained).length;
+
+      // Calculate rates
+      const openRate = sent > 0 ? (opens / sent) * 100 : 0;
+      const clickRate = sent > 0 ? (clicks / sent) * 100 : 0;
+
+      // Update the campaign with the calculated stats
+      await Campaign.update({
+        totalRecipients: stats.length,
+        sent,
+        delivered,
+        opens,
+        clicks,
+        bounces,
+        unsubscribes,
+        complaints,
+        openRate: Math.round(openRate * 100) / 100, // Round to 2 decimal places
+        clickRate: Math.round(clickRate * 100) / 100
+      }, {
+        where: { id: campaignId }
+      });
+
+      return {
+        totalRecipients: stats.length,
+        sent,
+        delivered,
+        opens,
+        clicks,
+        bounces,
+        unsubscribes,
+        complaints,
+        openRate,
+        clickRate
+      };
+    } catch (error) {
+      console.error('Error recalculating campaign stats:', error);
+      throw createError('Failed to recalculate campaign stats', 500, error);
+    }
+  }
+
+  /**
+   * Get campaign by ID with up-to-date stats
    */
   async getCampaign(campaignId, userId) {
     try {
@@ -42,7 +110,19 @@ class CampaignService {
         throw createError('Campaign not found', 404);
       }
       
-      return campaign;
+      // Recalculate and update stats from CampaignStat records
+      await this.recalculateCampaignStats(campaignId);
+      
+      // Fetch the campaign again to get the updated stats
+      const updatedCampaign = await Campaign.findOne({
+        where: { id: campaignId, userId },
+        include: [
+          { model: Template, as: 'template' },
+          { model: ContactList, as: 'contactList' }
+        ]
+      });
+      
+      return updatedCampaign;
     } catch (error) {
       if (error.status) throw error;
       throw createError('Failed to fetch campaign', 500, error);
