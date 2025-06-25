@@ -19,6 +19,7 @@ router.post('/contacts/bounce', validateApiKey, trackingController.recordBounce)
 router.post('/contacts/complaint', validateApiKey, trackingController.recordComplaint);
 router.post('/campaign/status', validateApiKey, trackingController.updateCampaignStatus);
 router.post('/contact/campaign-send', validateApiKey, trackingController.updateContactForCampaignSend);
+router.post('/validate-unsubscribe-token', validateApiKey, trackingController.validateUnsubscribeToken);
 
 // EMAIL TRACKING ENDPOINTS (Public - no auth required)
 // These are accessed by email clients and tracking pixels

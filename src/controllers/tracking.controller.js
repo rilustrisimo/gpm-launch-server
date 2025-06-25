@@ -1038,6 +1038,84 @@ async function trackEmailClick(req, res) {
   }
 }
 
+/**
+ * Validate an unsubscribe token
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+async function validateUnsubscribeToken(req, res) {
+  try {
+    const { token, email } = req.body;
+    
+    if (!token || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token and email are required'
+      });
+    }
+    
+    // The unsubscribe token is generated using:
+    // crypto.createHash('sha256').update(`${email}:${campaignId}:${process.env.UNSUBSCRIBE_SECRET}`).digest('hex');
+    // 
+    // To validate, we need to find campaigns that this email was part of
+    // and check if any of them would generate this token
+    
+    const crypto = require('crypto');
+    const UNSUBSCRIBE_SECRET = process.env.UNSUBSCRIBE_SECRET || 'default-secret';
+    
+    // Find all campaigns this contact was part of
+    const contact = await Contact.findOne({
+      where: { email: email.toLowerCase() },
+      include: [{
+        model: ContactList,
+        as: 'lists',
+        include: [{
+          model: Campaign,
+          as: 'campaigns'
+        }]
+      }]
+    });
+    
+    if (!contact) {
+      return res.status(404).json({
+        success: false,
+        message: 'Contact not found'
+      });
+    }
+    
+    // Check each campaign this contact was part of
+    for (const list of contact.lists) {
+      for (const campaign of list.campaigns) {
+        const expectedToken = crypto
+          .createHash('sha256')
+          .update(`${email}:${campaign.id}:${UNSUBSCRIBE_SECRET}`)
+          .digest('hex');
+        
+        if (expectedToken === token) {
+          return res.json({
+            success: true,
+            valid: true,
+            campaignId: campaign.id
+          });
+        }
+      }
+    }
+    
+    // If no matching token found, it's invalid
+    return res.json({
+      success: true,
+      valid: false
+    });
+    
+  } catch (error) {
+    console.error('Error validating unsubscribe token:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error validating token'
+    });
+  }
+}
+
 module.exports = {
   updateTracking,
   updateBatchTracking,
@@ -1047,5 +1125,6 @@ module.exports = {
   updateCampaignStatus,
   updateContactForCampaignSend,
   trackEmailOpen,
-  trackEmailClick
+  trackEmailClick,
+  validateUnsubscribeToken
 };
