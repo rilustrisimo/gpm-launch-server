@@ -59,6 +59,20 @@ async function recalculateCampaignStatsFromContacts(campaign) {
       clicks: contacts.filter(c => c.lastClicked).length
     };
 
+    // Calculate rates based on delivered emails
+    const deliveredCount = stats.delivered;
+    if (deliveredCount > 0) {
+      // Open rate: percentage of delivered emails that were opened
+      stats.openRate = parseFloat(((stats.opens / deliveredCount) * 100).toFixed(2));
+      
+      // Click rate: percentage of delivered emails that were clicked
+      stats.clickRate = parseFloat(((stats.clicks / deliveredCount) * 100).toFixed(2));
+    } else {
+      // If no emails delivered, rates are 0
+      stats.openRate = 0;
+      stats.clickRate = 0;
+    }
+
     // Update campaign with calculated stats
     await campaign.update(stats);
     console.log(`Recalculated stats for campaign ${campaign.id}:`, stats);
@@ -232,40 +246,8 @@ async function updateUnsubscribe(req, res, next) {
       
       if (campaign && campaign.contactList) {
         try {
-          // Calculate stats from contacts in the campaign's contact list
-          const contacts = await Contact.findAll({
-            include: [{
-              model: ContactList,
-              as: 'lists',
-              where: { id: campaign.contactList.id },
-              attributes: [],
-              through: { attributes: [] }
-            }],
-            attributes: [
-              'id', 
-              'email', 
-              'hasBounced', 
-              'hasComplained', 
-              'unsubscribed', 
-              'lastOpened', 
-              'lastClicked', 
-              'lastDelivered'
-            ]
-          });
-
-          // Calculate stats
-          const stats = {
-            bounces: contacts.filter(c => c.hasBounced).length,
-            complaints: contacts.filter(c => c.hasComplained).length,
-            unsubscribes: contacts.filter(c => c.unsubscribed).length,
-            delivered: contacts.filter(c => c.lastDelivered).length,
-            opens: contacts.filter(c => c.lastOpened).length,
-            clicks: contacts.filter(c => c.lastClicked).length
-          };
-
-          // Update campaign with calculated stats
-          await campaign.update(stats);
-          console.log(`Updated campaign ${campaignId} stats from contacts:`, stats);
+          // Use the centralized recalculation function
+          await recalculateCampaignStatsFromContacts(campaign);
         } catch (statsError) {
           console.error(`Error calculating stats from contacts: ${statsError.message}`);
         }
@@ -362,40 +344,8 @@ async function recordBounce(req, res, next) {
           });
           
           if (campaign && campaign.contactList) {
-            // Calculate stats from contacts in the campaign's contact list
-            const contacts = await Contact.findAll({
-              include: [{
-                model: ContactList,
-                as: 'lists',
-                where: { id: campaign.contactList.id },
-                attributes: [],
-                through: { attributes: [] }
-              }],
-              attributes: [
-                'id', 
-                'email', 
-                'hasBounced', 
-                'hasComplained', 
-                'unsubscribed', 
-                'lastOpened', 
-                'lastClicked', 
-                'lastDelivered'
-              ]
-            });
-
-            // Calculate stats
-            const stats = {
-              bounces: contacts.filter(c => c.hasBounced).length,
-              complaints: contacts.filter(c => c.hasComplained).length,
-              unsubscribes: contacts.filter(c => c.unsubscribed).length,
-              delivered: contacts.filter(c => c.lastDelivered).length,
-              opens: contacts.filter(c => c.lastOpened).length,
-              clicks: contacts.filter(c => c.lastClicked).length
-            };
-
-            // Update campaign with calculated stats
-            await campaign.update(stats);
-            console.log(`Updated campaign ${campaignId} stats from contacts:`, stats);
+            // Use the centralized recalculation function
+            await recalculateCampaignStatsFromContacts(campaign);
           }
         }
       } catch (err) {
@@ -492,19 +442,8 @@ async function recordComplaint(req, res, next) {
               ]
             });
 
-            // Calculate stats
-            const stats = {
-              bounces: contacts.filter(c => c.hasBounced).length,
-              complaints: contacts.filter(c => c.hasComplained).length,
-              unsubscribes: contacts.filter(c => c.unsubscribed).length,
-              delivered: contacts.filter(c => c.lastDelivered).length,
-              opens: contacts.filter(c => c.lastOpened).length,
-              clicks: contacts.filter(c => c.lastClicked).length
-            };
-
-            // Update campaign with calculated stats
-            await campaign.update(stats);
-            console.log(`Updated campaign ${campaignId} stats from contacts:`, stats);
+            // Use the centralized recalculation function
+            await recalculateCampaignStatsFromContacts(campaign);
           }
         }
       } catch (err) {
