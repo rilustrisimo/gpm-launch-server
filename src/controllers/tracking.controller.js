@@ -159,15 +159,21 @@ async function updateTracking(req, res, next) {
         break;
         
       case 'send':
-        // Update contact's last engagement for send events
+        // Update contact's last engagement and lastDelivered for send events
         await contact.update({
           lastDelivered: trackingData.timestamp || new Date(),
           lastEngagement: trackingData.timestamp || new Date()
         });
         
-        // For send events, we might want to track this differently
-        // since it's not necessarily stored as a contact field
-        // but we can still recalculate other stats
+        // For send events, also increment the delivered counter
+        try {
+          await campaign.increment('delivered', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign delivered for send event: ${incrementError.message}`);
+          const currentCount = campaign.delivered || 0;
+          await campaign.update({ delivered: currentCount + 1 });
+        }
+        
         await recalculateCampaignStatsFromContacts(campaign);
         break;
     }
@@ -583,7 +589,17 @@ async function updateBatchTracking(req, res, next) {
                 await campaign.update({ sent: currentCount + 1 });
               }
               
+              // Also treat send events as delivery events since worker might only use send
+              try {
+                await campaign.increment('delivered', { by: 1 });
+              } catch (incrementError) {
+                console.error(`Error incrementing campaign delivered in batch for send: ${incrementError.message}`);
+                const currentCount = campaign.delivered || 0;
+                await campaign.update({ delivered: currentCount + 1 });
+              }
+              
               await contact.update({
+                lastDelivered: trackingData.timestamp || new Date(),
                 lastEngagement: trackingData.timestamp || new Date()
               });
               break;
@@ -747,8 +763,16 @@ async function updateContactForCampaignSend(req, res, next) {
     // Handle different event types and update appropriate fields
     switch (eventType.toLowerCase()) {
       case 'send':
-        // For send events, just update last engagement
+        // For send events, update lastDelivered since worker might be using send instead of delivery
         contactUpdates.lastDelivered = updateTimestamp;
+        try {
+          // Also increment delivered count for send events since worker might not send delivery events
+          await campaign.increment('delivered', { by: 1 });
+        } catch (incrementError) {
+          console.error(`Error incrementing campaign delivered for send event: ${incrementError.message}`);
+          const currentCount = campaign.delivered || 0;
+          await campaign.update({ delivered: currentCount + 1 });
+        }
         break;
         
       case 'delivery':
