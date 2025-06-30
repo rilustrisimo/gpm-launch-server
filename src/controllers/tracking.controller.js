@@ -59,16 +59,22 @@ async function recalculateCampaignStatsFromContacts(campaign) {
       clicks: contacts.filter(c => c.lastClicked).length
     };
 
-    // Calculate rates based on delivered emails
+    // Calculate rates based on total recipients in the contact list
+    // If no delivered count is available, use total contacts as denominator
+    const totalContacts = contacts.length;
     const deliveredCount = stats.delivered;
-    if (deliveredCount > 0) {
-      // Open rate: percentage of delivered emails that were opened
-      stats.openRate = parseFloat(((stats.opens / deliveredCount) * 100).toFixed(2));
+    
+    // Use delivered count if available, otherwise use total contacts
+    const denominator = deliveredCount > 0 ? deliveredCount : totalContacts;
+    
+    if (denominator > 0) {
+      // Open rate: percentage of emails that were opened
+      stats.openRate = parseFloat(((stats.opens / denominator) * 100).toFixed(2));
       
-      // Click rate: percentage of delivered emails that were clicked
-      stats.clickRate = parseFloat(((stats.clicks / deliveredCount) * 100).toFixed(2));
+      // Click rate: percentage of emails that were clicked
+      stats.clickRate = parseFloat(((stats.clicks / denominator) * 100).toFixed(2));
     } else {
-      // If no emails delivered, rates are 0
+      // If no emails or contacts, rates are 0
       stats.openRate = 0;
       stats.clickRate = 0;
     }
@@ -1068,5 +1074,6 @@ module.exports = {
   updateContactForCampaignSend,
   trackEmailOpen,
   trackEmailClick,
-  validateUnsubscribeToken
+  validateUnsubscribeToken,
+  recalculateCampaignStatsFromContacts
 };
