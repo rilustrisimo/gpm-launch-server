@@ -161,6 +161,7 @@ async function updateTracking(req, res, next) {
       case 'send':
         // Update contact's last engagement for send events
         await contact.update({
+          lastDelivered: trackingData.timestamp || new Date(),
           lastEngagement: trackingData.timestamp || new Date()
         });
         
@@ -747,6 +748,7 @@ async function updateContactForCampaignSend(req, res, next) {
     switch (eventType.toLowerCase()) {
       case 'send':
         // For send events, just update last engagement
+        contactUpdates.lastDelivered = updateTimestamp;
         break;
         
       case 'delivery':
@@ -788,6 +790,7 @@ async function updateContactForCampaignSend(req, res, next) {
       case 'bounce':
         contactUpdates.hasBounced = true;
         contactUpdates.lastBouncedAt = updateTimestamp;
+        contactUpdates.lastDelivered = null;
         if (data && data.bounceType) {
           contactUpdates.bounceType = data.bounceType;
           // Update status to 'bounced' for permanent bounces
