@@ -836,6 +836,9 @@ async function updateContactForCampaignSend(req, res, next) {
     // Update the contact with all changes
     await contact.update(contactUpdates);
     
+    // Recalculate campaign stats from contacts to ensure accurate rates
+    await recalculateCampaignStatsFromContacts(campaign);
+    
     console.log(`Successfully updated contact ${contactId} for ${eventType} event`);
     
     res.status(200).json({
