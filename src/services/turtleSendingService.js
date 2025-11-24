@@ -208,13 +208,18 @@ class TurtleSendingService {
     const emailService = this.getEmailService();
     emailContent = emailService.addUnsubscribeLink(emailContent, contact.email, campaign.id);
 
+    // Use campaign's sender information or fall back to environment variables
+    const fromName = campaign.fromName || process.env.FROM_NAME || 'Gravity Point Media';
+    const fromEmail = campaign.fromEmail || process.env.FROM_EMAIL || 'support@send.gravitypointmedia.com';
+    const replyToEmail = campaign.replyToEmail || process.env.REPLY_TO_EMAIL || 'support@gravitypointmedia.com';
+
     // Send email
     const result = await emailService.send({
       to: contact.email,
       subject: campaign.subject,
       html: emailContent,
-      from: process.env.FROM_EMAIL || 'noreply@gravitypointmedia.com',
-      replyTo: process.env.REPLY_TO_EMAIL
+      from: `${fromName} <${fromEmail}>`,
+      replyTo: replyToEmail
     });
 
     // If email service confirms delivery, update record
