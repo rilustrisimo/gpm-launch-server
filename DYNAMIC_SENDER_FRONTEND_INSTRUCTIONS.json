@@ -1,0 +1,293 @@
+{
+  "title": "Dynamic Sender Fields - Frontend Implementation Guide",
+  "version": "1.0.0",
+  "date": "2025-07-03",
+  "summary": "Implementation guide for dynamic 'from' and 'replyTo' email fields in campaign creation/editing forms",
+  
+  "overview": {
+    "description": "This update adds dynamic sender field selection to campaigns, allowing users to choose from verified AWS SES identities, input custom from names, and specify reply-to addresses.",
+    "benefits": [
+      "Professional branding with custom sender names",
+      "Flexible reply-to routing for better communication",
+      "AWS SES compliance with verified identities",
+      "Improved email deliverability"
+    ]
+  },
+
+  "backend_changes": {
+    "new_database_fields": [
+      {
+        "field": "fromName",
+        "type": "STRING",
+        "description": "Display name for the sender (e.g., 'John Smith' or 'Acme Corp')",
+        "default": "Gravity Point Media",
+        "required": false
+      },
+      {
+        "field": "fromEmail", 
+        "type": "STRING",
+        "description": "Email address for the sender (must be verified in AWS SES)",
+        "default": "support@send.gravitypointmedia.com",
+        "required": false
+      },
+      {
+        "field": "replyToEmail",
+        "type": "STRING", 
+        "description": "Email address for replies (can be different from sender)",
+        "default": "support@gravitypointmedia.com",
+        "required": false
+      }
+    ],
+    
+    "new_api_endpoint": {
+      "url": "/api/campaigns/verified-identities",
+      "method": "GET",
+      "description": "Fetches list of verified AWS SES email identities",
+      "authentication": "Required (Bearer token)",
+      "response_format": {
+        "success": true,
+        "identities": [
+          "support@send.gravitypointmedia.com",
+          "noreply@gravitypointmedia.com",
+          "sales@gravitypointmedia.com"
+        ]
+      },
+      "error_handling": {
+        "no_aws_credentials": {
+          "success": false,
+          "message": "AWS credentials not configured",
+          "fallback": "Show default email options only"
+        },
+        "aws_api_error": {
+          "success": false,
+          "message": "Failed to fetch verified identities",
+          "fallback": "Show default email options only"
+        }
+      }
+    },
+
+    "updated_campaign_endpoints": {
+      "create_campaign": {
+        "url": "/api/campaigns",
+        "method": "POST",
+        "new_fields": ["fromName", "fromEmail", "replyToEmail"],
+        "validation": {
+          "fromEmail": "Must be verified in AWS SES (validated server-side)",
+          "replyToEmail": "Must be valid email format"
+        }
+      },
+      "update_campaign": {
+        "url": "/api/campaigns/:id",
+        "method": "PUT", 
+        "new_fields": ["fromName", "fromEmail", "replyToEmail"],
+        "validation": {
+          "fromEmail": "Must be verified in AWS SES (validated server-side)",
+          "replyToEmail": "Must be valid email format"
+        }
+      }
+    }
+  },
+
+  "frontend_requirements": {
+    "campaign_form_updates": {
+      "new_form_section": {
+        "title": "Sender Settings",
+        "description": "Configure who the email appears to be from and where replies should go",
+        "position": "After template selection, before recipient selection"
+      },
+      
+      "form_fields": [
+        {
+          "field_name": "fromEmail",
+          "label": "From Email",
+          "type": "dropdown/select",
+          "description": "Email address the campaign will be sent from",
+          "data_source": "GET /api/campaigns/verified-identities",
+          "required": false,
+          "default_value": "support@send.gravitypointmedia.com",
+          "validation": "Must be from verified identities list",
+          "error_handling": {
+            "api_failure": "Show default options and allow manual input with warning",
+            "invalid_selection": "Show error: 'Please select a verified email address'"
+          }
+        },
+        {
+          "field_name": "fromName", 
+          "label": "From Name",
+          "type": "text_input",
+          "description": "Display name that appears with the email address",
+          "placeholder": "e.g., John Smith, Acme Corporation",
+          "required": false,
+          "default_value": "Gravity Point Media",
+          "max_length": 255,
+          "validation": "Standard text validation, no special characters restrictions"
+        },
+        {
+          "field_name": "replyToEmail",
+          "label": "Reply To Email", 
+          "type": "email_input",
+          "description": "Where replies will be sent (can be different from sender)",
+          "placeholder": "e.g., support@yourcompany.com",
+          "required": false,
+          "default_value": "support@gravitypointmedia.com",
+          "validation": "Valid email format required"
+        }
+      ]
+    },
+
+    "ui_ux_guidelines": {
+      "layout": {
+        "form_grouping": "Group all sender fields in a collapsible section or card",
+        "field_spacing": "Use consistent spacing between fields",
+        "help_text": "Include helpful descriptions for each field"
+      },
+      
+      "user_experience": {
+        "progressive_disclosure": "Consider making sender settings collapsible/expandable",
+        "smart_defaults": "Pre-populate with sensible defaults",
+        "validation_feedback": "Real-time validation with clear error messages",
+        "loading_states": "Show loading indicators when fetching verified identities"
+      },
+
+      "visual_design": {
+        "field_icons": "Use envelope/mail icons for email fields, person icon for from name",
+        "help_tooltips": "Add question mark tooltips with additional context",
+        "preview": "Consider showing email preview: 'From: [fromName] <[fromEmail]>'"
+      }
+    },
+
+    "error_handling": {
+      "scenarios": [
+        {
+          "scenario": "API endpoint fails to load verified identities",
+          "action": "Show default email options and allow manual input with warning message",
+          "message": "Unable to load verified emails. Using default options."
+        },
+        {
+          "scenario": "User selects unverified email",
+          "action": "Show validation error and prevent form submission",
+          "message": "Please select a verified email address from the dropdown."
+        },
+        {
+          "scenario": "Invalid reply-to email format",
+          "action": "Show field-level validation error",
+          "message": "Please enter a valid email address."
+        },
+        {
+          "scenario": "Network errors during form submission",
+          "action": "Show general error message and allow retry",
+          "message": "Failed to save campaign. Please check your connection and try again."
+        }
+      ]
+    }
+  },
+
+  "api_integration": {
+    "fetch_verified_identities": {
+      "when_to_call": "When campaign form loads or when user focuses on fromEmail field",
+      "caching": "Cache response for 5-10 minutes to avoid repeated API calls",
+      "fallback": "If API fails, show default email addresses",
+      "example_code": {
+        "javascript": "// See FRONTEND_CODE_EXAMPLES.md for implementation details"
+      }
+    },
+
+    "form_submission": {
+      "include_fields": ["fromName", "fromEmail", "replyToEmail"],
+      "validation": "Validate on client-side before submission, server will re-validate",
+      "error_handling": "Display server validation errors next to relevant fields"
+    }
+  },
+
+  "testing_requirements": {
+    "functional_tests": [
+      "Verify verified identities dropdown loads correctly",
+      "Test form submission with all sender field combinations",
+      "Validate error handling when API endpoints fail",
+      "Check that default values are applied correctly",
+      "Test form validation for required and optional fields"
+    ],
+    
+    "user_acceptance_tests": [
+      "User can create campaign with custom sender name",
+      "User can select different from and reply-to emails", 
+      "User sees helpful error messages for invalid inputs",
+      "Form gracefully handles API failures",
+      "Email preview shows correct sender information"
+    ],
+
+    "edge_cases": [
+      "No verified identities available",
+      "API returns empty response",
+      "User has no internet connection",
+      "Very long sender names",
+      "Special characters in sender names"
+    ]
+  },
+
+  "backwards_compatibility": {
+    "existing_campaigns": "Will continue to use default sender settings",
+    "data_migration": "No migration required - new fields have defaults",
+    "api_compatibility": "Existing API calls will work unchanged"
+  },
+
+  "deployment_notes": {
+    "environment_variables": [
+      "AWS_ACCESS_KEY_ID - Required for verified identities endpoint",
+      "AWS_SECRET_ACCESS_KEY - Required for verified identities endpoint", 
+      "AWS_REGION - AWS region for SES (defaults to us-east-1)"
+    ],
+    
+    "deployment_order": [
+      "Backend API changes (already deployed)",
+      "Database migration (already completed)",
+      "Frontend form updates (pending)",
+      "User testing and feedback",
+      "Production rollout"
+    ]
+  },
+
+  "sample_form_data": {
+    "example_campaign_payload": {
+      "name": "Summer Sale Campaign",
+      "templateId": 123,
+      "contactListId": 456,
+      "fromName": "Sarah from Acme Corp",
+      "fromEmail": "sarah@send.gravitypointmedia.com",
+      "replyToEmail": "support@acmecorp.com",
+      "sendingMode": "normal"
+    }
+  },
+
+  "support_documentation": {
+    "user_help_text": {
+      "fromEmail": "Choose the email address that will appear as the sender. This must be verified in our email system for deliverability.",
+      "fromName": "Enter the name that will appear with the email address. This could be your name, company name, or campaign-specific identifier.",
+      "replyToEmail": "Specify where replies should be sent. This can be different from the sender email and doesn't need to be verified."
+    },
+    
+    "troubleshooting": {
+      "email_not_verified": "If you need to send from a new email address, please contact support to have it verified in our system.",
+      "deliverability_issues": "Using verified sender addresses improves email deliverability and reduces spam classification.",
+      "reply_routing": "Set up reply-to addresses to route responses to the appropriate team or individual."
+    }
+  },
+
+  "implementation_priority": {
+    "phase_1": [
+      "Add basic form fields for sender settings",
+      "Implement verified identities API call",
+      "Add client-side validation"
+    ],
+    "phase_2": [
+      "Enhance UI/UX with better styling",
+      "Add email preview functionality", 
+      "Implement advanced error handling"
+    ],
+    "phase_3": [
+      "Add sender identity management interface",
+      "Implement bulk email verification workflow",
+      "Add analytics for sender performance"
+    ]
+  }
+}

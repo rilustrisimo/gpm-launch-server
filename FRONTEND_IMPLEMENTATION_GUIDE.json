@@ -1,0 +1,339 @@
+{
+  "feature": "Dynamic Email Sender Fields",
+  "description": "Add dynamic selection of from name, from email, and reply-to email fields for email campaigns",
+  "version": "1.0.0",
+  "date": "2025-07-03",
+  
+  "api_endpoints": {
+    "get_verified_identities": {
+      "method": "GET",
+      "url": "/api/campaigns/verified-identities",
+      "description": "Fetch list of verified email addresses from AWS SES",
+      "authentication": "Bearer token required",
+      "response": {
+        "success": true,
+        "identities": [
+          "support@send.gravitypointmedia.com",
+          "noreply@example.com",
+          "john@company.com"
+        ]
+      },
+      "error_response": {
+        "success": false,
+        "message": "Error fetching verified email identities",
+        "error": "Error details"
+      }
+    },
+    
+    "create_campaign": {
+      "method": "POST",
+      "url": "/api/campaigns",
+      "description": "Create new campaign with sender fields",
+      "authentication": "Bearer token required",
+      "new_fields": {
+        "fromName": {
+          "type": "string",
+          "required": false,
+          "max_length": 100,
+          "description": "Display name for the sender (e.g., 'John Doe', 'Support Team')",
+          "default": "Gravity Point Media",
+          "example": "John Doe"
+        },
+        "fromEmail": {
+          "type": "string",
+          "required": false,
+          "format": "email",
+          "description": "Email address to send from (must be verified in AWS SES)",
+          "default": "support@send.gravitypointmedia.com",
+          "example": "john@company.com"
+        },
+        "replyToEmail": {
+          "type": "string",
+          "required": false,
+          "format": "email",
+          "description": "Email address where replies should be sent",
+          "default": "support@gravitypointmedia.com",
+          "example": "support@company.com"
+        }
+      },
+      "request_example": {
+        "name": "My Campaign",
+        "subject": "Hello World",
+        "templateId": "uuid-here",
+        "contactListId": "uuid-here",
+        "fromName": "John Doe",
+        "fromEmail": "john@company.com",
+        "replyToEmail": "support@company.com"
+      }
+    },
+    
+    "update_campaign": {
+      "method": "PUT",
+      "url": "/api/campaigns/:id",
+      "description": "Update existing campaign including sender fields",
+      "authentication": "Bearer token required",
+      "updatable_fields": ["fromName", "fromEmail", "replyToEmail"],
+      "request_example": {
+        "fromName": "Jane Smith",
+        "fromEmail": "jane@company.com",
+        "replyToEmail": "help@company.com"
+      }
+    }
+  },
+  
+  "ui_components": {
+    "campaign_form": {
+      "new_fields": [
+        {
+          "field_name": "fromName",
+          "component_type": "text_input",
+          "label": "From Name",
+          "placeholder": "e.g., John Doe, Support Team",
+          "help_text": "The display name recipients will see as the sender",
+          "validation": {
+            "max_length": 100,
+            "trim": true
+          },
+          "default_value": "Gravity Point Media",
+          "required": false
+        },
+        {
+          "field_name": "fromEmail",
+          "component_type": "select_dropdown",
+          "label": "From Email Address",
+          "help_text": "Select a verified email address to send from",
+          "data_source": {
+            "endpoint": "/api/campaigns/verified-identities",
+            "value_field": "identities",
+            "loading_text": "Loading verified emails...",
+            "error_fallback": ["support@send.gravitypointmedia.com"]
+          },
+          "validation": {
+            "format": "email"
+          },
+          "default_value": "support@send.gravitypointmedia.com",
+          "required": false
+        },
+        {
+          "field_name": "replyToEmail",
+          "component_type": "email_input",
+          "label": "Reply-To Email",
+          "placeholder": "e.g., support@company.com",
+          "help_text": "Where recipients' replies will be sent",
+          "validation": {
+            "format": "email"
+          },
+          "default_value": "support@gravitypointmedia.com",
+          "required": false
+        }
+      ],
+      
+      "form_layout": {
+        "section_title": "Sender Settings",
+        "section_description": "Configure who the email appears to be from",
+        "field_order": ["fromName", "fromEmail", "replyToEmail"],
+        "responsive_layout": {
+          "mobile": "stacked",
+          "tablet": "two_column",
+          "desktop": "three_column"
+        }
+      }
+    }
+  },
+  
+  "frontend_implementation": {
+    "step_1_fetch_identities": {
+      "description": "Create function to fetch verified email identities",
+      "endpoint": "/api/campaigns/verified-identities",
+      "method": "GET",
+      "headers": "Authorization: Bearer {token}",
+      "returns": "Array of verified email addresses",
+      "fallback": "['support@send.gravitypointmedia.com']"
+    },
+    
+    "step_2_form_state": {
+      "description": "Update form state to include new sender fields",
+      "new_state_fields": {
+        "fromName": "Gravity Point Media",
+        "fromEmail": "support@send.gravitypointmedia.com",
+        "replyToEmail": "support@gravitypointmedia.com"
+      },
+      "additional_state": {
+        "verifiedEmails": "Array",
+        "loadingEmails": "Boolean"
+      }
+    },
+    
+    "step_3_form_fields": {
+      "description": "Add form fields for sender configuration",
+      "section_title": "Sender Settings",
+      "fields": ["fromName input", "fromEmail select", "replyToEmail input"],
+      "layout": "Responsive grid (1-2-3 columns based on screen size)"
+    },
+    
+    "step_4_form_submission": {
+      "description": "Update form submission to include sender fields",
+      "include_fields": ["fromName", "fromEmail", "replyToEmail"],
+      "validation": "Client-side validation before submission",
+      "error_handling": "Display validation errors to user"
+    }
+  },
+  
+  "validation_rules": {
+    "client_side": {
+      "fromName": {
+        "max_length": 100,
+        "trim": true,
+        "optional": true
+      },
+      "fromEmail": {
+        "format": "email",
+        "optional": true,
+        "must_be_in_verified_list": true
+      },
+      "replyToEmail": {
+        "format": "email",
+        "optional": true
+      }
+    },
+    
+    "server_side": {
+      "description": "Server validates all fields and ensures fromEmail is verified in AWS SES",
+      "error_responses": {
+        "invalid_from_name": {
+          "field": "fromName",
+          "message": "From name must be between 1 and 100 characters"
+        },
+        "invalid_from_email": {
+          "field": "fromEmail",
+          "message": "Invalid from email address"
+        },
+        "invalid_reply_to": {
+          "field": "replyToEmail",
+          "message": "Invalid reply-to email address"
+        }
+      }
+    }
+  },
+  
+  "styling_guidelines": {
+    "css_classes": {
+      "form_section": ".sender-settings-section",
+      "fields_container": ".sender-fields-grid",
+      "field_wrapper": ".form-field",
+      "input_elements": ".form-input, .form-select",
+      "help_text": ".help-text",
+      "loading_state": ".loading-dropdown"
+    },
+    
+    "responsive_design": {
+      "mobile": {
+        "layout": "single column",
+        "field_spacing": "16px",
+        "input_height": "44px"
+      },
+      "tablet": {
+        "layout": "two columns",
+        "field_spacing": "20px",
+        "input_height": "40px"
+      },
+      "desktop": {
+        "layout": "three columns",
+        "field_spacing": "24px",
+        "input_height": "36px"
+      }
+    }
+  },
+  
+  "testing_scenarios": {
+    "unit_tests": [
+      {
+        "test_name": "Fetch verified identities",
+        "description": "Should fetch and display verified email addresses",
+        "expected_behavior": "Dropdown populated with verified emails"
+      },
+      {
+        "test_name": "Form validation",
+        "description": "Should validate sender fields on form submission",
+        "test_cases": [
+          "Valid email formats accepted",
+          "Invalid email formats rejected",
+          "From name length validation",
+          "Empty fields use defaults"
+        ]
+      },
+      {
+        "test_name": "API error handling",
+        "description": "Should handle API errors gracefully",
+        "expected_behavior": "Fallback to default email if API fails"
+      }
+    ],
+    
+    "integration_tests": [
+      {
+        "test_name": "End-to-end campaign creation",
+        "description": "Create campaign with custom sender fields",
+        "steps": [
+          "Fill out campaign form with custom sender info",
+          "Submit form",
+          "Verify campaign created with correct sender fields",
+          "Verify email sends with custom from/reply-to"
+        ]
+      }
+    ]
+  },
+  
+  "backward_compatibility": {
+    "existing_campaigns": {
+      "description": "Existing campaigns will continue to work with default sender values",
+      "migration_strategy": "No frontend changes needed for existing campaigns"
+    },
+    
+    "form_updates": {
+      "description": "Edit campaign forms should display current sender values or defaults",
+      "implementation": "Pre-populate fields with campaign.fromName, campaign.fromEmail, campaign.replyToEmail"
+    }
+  },
+  
+  "accessibility": {
+    "requirements": [
+      "All form fields must have proper labels",
+      "Help text should be associated with fields using aria-describedby",
+      "Loading states must be announced to screen readers",
+      "Form validation errors must be announced",
+      "Keyboard navigation should work for all form elements"
+    ],
+    
+    "aria_attributes": {
+      "fromName": "aria-describedby='fromName-help'",
+      "fromEmail": "aria-describedby='fromEmail-help'",
+      "replyToEmail": "aria-describedby='replyToEmail-help'"
+    }
+  },
+  
+  "deployment_notes": {
+    "database_migration": {
+      "status": "Completed",
+      "file": "20250703000000-add-sender-fields-to-campaign.js",
+      "description": "Added fromName, fromEmail, replyToEmail fields to Campaigns table"
+    },
+    
+    "backend_endpoints": {
+      "status": "Implemented",
+      "new_endpoint": "GET /api/campaigns/verified-identities",
+      "updated_endpoints": [
+        "POST /api/campaigns (accepts new fields)",
+        "PUT /api/campaigns/:id (accepts new fields)"
+      ]
+    },
+    
+    "environment_variables": {
+      "required": [
+        "AWS_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY"
+      ],
+      "description": "Needed for fetching verified AWS SES identities"
+    }
+  }
+}

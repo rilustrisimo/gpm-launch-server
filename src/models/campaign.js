@@ -128,6 +128,21 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       defaultValue: 10, // normal mode default
       allowNull: false
+    },
+    fromName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'Gravity Point Media'
+    },
+    fromEmail: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'support@send.gravitypointmedia.com'
+    },
+    replyToEmail: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'support@gravitypointmedia.com'
     }
   }, {
     sequelize,

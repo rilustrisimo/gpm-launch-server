@@ -16,6 +16,9 @@ router.post('/:id/update-stats', validateApiKey, campaignController.updateCampai
 // Apply auth middleware to all other routes
 router.use(auth);
 
+// Get verified email identities
+router.get('/verified-identities', campaignController.getVerifiedIdentities);
+
 // Get all campaigns
 router.get('/', campaignController.getCampaigns);
 
@@ -36,7 +39,10 @@ router.post(
     body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor'),
     body('sendingMode').optional().isIn(['normal', 'turtle']).withMessage('Invalid sending mode'),
     body('emailsPerMinute').optional().isInt({ min: 1, max: 600 }).withMessage('Emails per minute must be between 1 and 600'),
-    body('maxConcurrentBatches').optional().isInt({ min: 1, max: 50 }).withMessage('Max concurrent batches must be between 1 and 50')
+    body('maxConcurrentBatches').optional().isInt({ min: 1, max: 50 }).withMessage('Max concurrent batches must be between 1 and 50'),
+    body('fromName').optional().trim().isLength({ min: 1, max: 100 }).withMessage('From name must be between 1 and 100 characters'),
+    body('fromEmail').optional().isEmail().withMessage('Invalid from email address'),
+    body('replyToEmail').optional().isEmail().withMessage('Invalid reply-to email address')
   ],
   campaignController.createCampaign
 );
@@ -53,7 +59,10 @@ router.put(
     body('scheduledFor').optional().isISO8601().withMessage('Invalid date format for scheduledFor'),
     body('sendingMode').optional().isIn(['normal', 'turtle']).withMessage('Invalid sending mode'),
     body('emailsPerMinute').optional().isInt({ min: 1, max: 600 }).withMessage('Emails per minute must be between 1 and 600'),
-    body('maxConcurrentBatches').optional().isInt({ min: 1, max: 50 }).withMessage('Max concurrent batches must be between 1 and 50')
+    body('maxConcurrentBatches').optional().isInt({ min: 1, max: 50 }).withMessage('Max concurrent batches must be between 1 and 50'),
+    body('fromName').optional().trim().isLength({ min: 1, max: 100 }).withMessage('From name must be between 1 and 100 characters'),
+    body('fromEmail').optional().isEmail().withMessage('Invalid from email address'),
+    body('replyToEmail').optional().isEmail().withMessage('Invalid reply-to email address')
   ],
   campaignController.updateCampaign
 );

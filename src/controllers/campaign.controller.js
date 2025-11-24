@@ -2,6 +2,7 @@ const { Campaign, Template, ContactList, CampaignStat, Contact, User, sequelize 
 const { Op } = require('sequelize');
 const { validationResult } = require('express-validator');
 const schedulerService = require('../services/schedulerService');
+const sesService = require('../services/sesService');
 
 const axios = require('axios');
 
@@ -89,6 +90,9 @@ const prepareCampaignDataForWorker = (campaign) => {
     sendingMode: campaign.sendingMode || 'normal',
     emailsPerMinute: campaign.emailsPerMinute,
     maxConcurrentBatches: campaign.maxConcurrentBatches || 10,
+    fromName: campaign.fromName || 'Gravity Point Media',
+    fromEmail: campaign.fromEmail || 'support@send.gravitypointmedia.com',
+    replyToEmail: campaign.replyToEmail || 'support@gravitypointmedia.com',
     template: {
       id: campaign.template.id,
       subject: campaign.subject || campaign.template.subject,
@@ -257,7 +261,10 @@ exports.createCampaign = async (req, res) => {
       scheduledFor,
       sendingMode = 'normal',
       emailsPerMinute,
-      maxConcurrentBatches = 10
+      maxConcurrentBatches = 10,
+      fromName,
+      fromEmail,
+      replyToEmail
     } = req.body;
 
     // Validate turtle send parameters
@@ -315,7 +322,10 @@ exports.createCampaign = async (req, res) => {
       scheduledFor: scheduledFor || null,
       sendingMode,
       emailsPerMinute,
-      maxConcurrentBatches
+      maxConcurrentBatches,
+      fromName: fromName || 'Gravity Point Media',
+      fromEmail: fromEmail || 'support@send.gravitypointmedia.com',
+      replyToEmail: replyToEmail || 'support@gravitypointmedia.com'
     }, { transaction });
 
     // Update template usage data
@@ -352,7 +362,7 @@ exports.updateCampaign = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { name, subject, templateId, contactListId, scheduledFor, status } = req.body;
+    const { name, subject, templateId, contactListId, scheduledFor, status, fromName, fromEmail, replyToEmail } = req.body;
 
     // Check if campaign exists and belongs to user
     const campaign = await Campaign.findOne({
@@ -432,7 +442,10 @@ exports.updateCampaign = async (req, res) => {
       contactListId: contactListId || campaign.contactListId,
       totalRecipients: req.body.totalRecipients || campaign.totalRecipients,
       status: status || campaign.status,
-      scheduledFor: scheduledFor !== undefined ? scheduledFor : campaign.scheduledFor
+      scheduledFor: scheduledFor !== undefined ? scheduledFor : campaign.scheduledFor,
+      fromName: fromName !== undefined ? fromName : campaign.fromName,
+      fromEmail: fromEmail !== undefined ? fromEmail : campaign.fromEmail,
+      replyToEmail: replyToEmail !== undefined ? replyToEmail : campaign.replyToEmail
     }, { transaction });
 
     await transaction.commit();
@@ -1343,6 +1356,27 @@ exports.getCampaignForWorker = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error retrieving campaign'
+    });
+  }
+};
+
+/**
+ * Get verified email identities from AWS SES
+ */
+exports.getVerifiedIdentities = async (req, res) => {
+  try {
+    const identities = await sesService.getVerifiedIdentities();
+    
+    return res.status(200).json({
+      success: true,
+      identities
+    });
+  } catch (error) {
+    console.error('Error fetching verified identities:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching verified email identities',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
