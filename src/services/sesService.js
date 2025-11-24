@@ -23,8 +23,11 @@ class SESService {
   async getVerifiedIdentities() {
     try {
       if (!this.awsAccessKeyId || !this.awsSecretAccessKey) {
-        // Return default if no AWS credentials configured
-        return ['support@send.gravitypointmedia.com'];
+        // Return default verified emails if no AWS credentials configured
+        return [
+          'support@send.gravitypointmedia.com',
+          'info@manitomanita.com'
+        ];
       }
 
       const service = 'ses';
@@ -80,11 +83,16 @@ class SESService {
 
       if (!response.ok) {
         console.error('AWS SES API error:', response.status, await response.text());
-        // Return default email if API call fails
-        return ['support@send.gravitypointmedia.com'];
+        // Return default emails if API call fails
+        return [
+          'support@send.gravitypointmedia.com',
+          'info@manitomanita.com'
+        ];
       }
 
       const data = await response.json();
+      
+      console.log('📧 AWS SES Response:', JSON.stringify(data, null, 2));
       
       // Extract email addresses from the response
       const identities = data.EmailIdentities || [];
@@ -92,17 +100,29 @@ class SESService {
         .filter(identity => identity.IdentityType === 'EMAIL_ADDRESS' && identity.VerificationStatus === 'SUCCESS')
         .map(identity => identity.IdentityName);
 
-      // Always include default if not present
-      if (!emailAddresses.includes('support@send.gravitypointmedia.com')) {
-        emailAddresses.unshift('support@send.gravitypointmedia.com');
-      }
+      console.log('✅ Verified emails from AWS:', emailAddresses);
+
+      // Always include default emails if not present
+      const defaultEmails = [
+        'support@send.gravitypointmedia.com',
+        'info@manitomanita.com'
+      ];
+      
+      defaultEmails.forEach(email => {
+        if (!emailAddresses.includes(email)) {
+          emailAddresses.push(email);
+        }
+      });
 
       return emailAddresses;
 
     } catch (error) {
       console.error('Error fetching verified identities:', error);
-      // Return default email if there's an error
-      return ['support@send.gravitypointmedia.com'];
+      // Return default emails if there's an error
+      return [
+        'support@send.gravitypointmedia.com',
+        'info@manitomanita.com'
+      ];
     }
   }
 
