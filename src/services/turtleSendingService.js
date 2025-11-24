@@ -214,12 +214,14 @@ class TurtleSendingService {
     const replyToEmail = campaign.replyToEmail || process.env.REPLY_TO_EMAIL || 'support@gravitypointmedia.com';
 
     // Send email
-    const result = await emailService.send({
+    console.log('📧 Sending email with sender:', { fromName, fromEmail, to: contact.email });
+    const result = await emailService.sendEmail({
       to: contact.email,
       subject: campaign.subject,
       html: emailContent,
       from: `${fromName} <${fromEmail}>`,
-      replyTo: replyToEmail
+      campaignId: campaign.id,
+      contactId: contact.id
     });
 
     // If email service confirms delivery, update record
