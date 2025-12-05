@@ -1,5 +1,5 @@
 const { Campaign, Template, ContactList, CampaignStat, Contact, User, sequelize } = require('../models');
-const { Op } = require('sequelize');
+const { Op, Transaction } = require('sequelize');
 const { validationResult } = require('express-validator');
 const schedulerService = require('../services/schedulerService');
 const sesService = require('../services/sesService');
@@ -895,7 +895,7 @@ exports.cancelSchedule = async (req, res) => {
 // Send campaign immediately
 exports.sendCampaignNow = async (req, res) => {
   const transaction = await sequelize.transaction({
-    isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+    isolationLevel: Transaction.ISOLATION_LEVELS.READ_COMMITTED
   });
   
   console.log(`🚀 Starting sendCampaignNow for campaign ${req.params.id}`);
