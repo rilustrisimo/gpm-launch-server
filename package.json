@@ -12,6 +12,7 @@
     "vercel-build": "npm install && (npx sequelize-cli db:migrate || echo 'Migration failed, but continuing build')"
   },
   "dependencies": {
+    "aws-sdk": "2.1691.0",
     "axios": "1.6.8",
     "bcryptjs": "2.4.3",
     "cors": "2.8.5",
