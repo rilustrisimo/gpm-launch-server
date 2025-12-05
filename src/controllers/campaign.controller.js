@@ -894,13 +894,16 @@ exports.cancelSchedule = async (req, res) => {
 
 // Send campaign immediately
 exports.sendCampaignNow = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  const transaction = await sequelize.transaction({
+    isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+  });
   
   console.log(`🚀 Starting sendCampaignNow for campaign ${req.params.id}`);
   console.log(`📊 Worker URL: ${WORKER_URL}`);
   console.log(`🔑 Worker API Key configured: ${WORKER_API_KEY ? 'YES' : 'NO'}`);
   
   try {
+    console.log(`📋 Loading campaign ${req.params.id} with contacts...`);
     const campaign = await Campaign.findOne({
       where: {
         id: req.params.id,
@@ -909,28 +912,62 @@ exports.sendCampaignNow = async (req, res) => {
       include: [
         {
           model: Template,
-          as: 'template'
+          as: 'template',
+          required: true
         },
         {
           model: ContactList,
           as: 'contactList',
+          required: true,
           include: [
             {
               model: Contact,
               as: 'contacts',
-              attributes: ['id', 'email', 'firstName', 'lastName']
+              attributes: ['id', 'email', 'firstName', 'lastName'],
+              required: false
             }
           ]
         }
       ],
       transaction
     });
+    
+    console.log(`📋 Campaign loaded: ${campaign ? 'YES' : 'NO'}`);
+    if (campaign) {
+      console.log(`📋 Has template: ${campaign.template ? 'YES' : 'NO'}`);
+      console.log(`📋 Has contactList: ${campaign.contactList ? 'YES' : 'NO'}`);
+      console.log(`📋 Contact count: ${campaign.contactList?.contacts?.length || 0}`);
+    }
 
     if (!campaign) {
       await transaction.rollback();
       return res.status(404).json({
         success: false,
         message: 'Campaign not found or access denied'
+      });
+    }
+    
+    if (!campaign.template) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Campaign template not found'
+      });
+    }
+    
+    if (!campaign.contactList) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Campaign contact list not found'
+      });
+    }
+    
+    if (!campaign.contactList.contacts || campaign.contactList.contacts.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'No contacts found in the contact list'
       });
     }
 
@@ -943,7 +980,7 @@ exports.sendCampaignNow = async (req, res) => {
     }
 
     // Create CampaignStat records for tracking (for all campaigns)
-    console.log(`� Setting up campaign ${campaign.id} with ${campaign.contactList.contacts.length} contacts (mode: ${campaign.sendingMode || 'normal'})`);
+    console.log(`📊 Setting up campaign ${campaign.id} with ${campaign.contactList.contacts.length} contacts (mode: ${campaign.sendingMode || 'normal'})`);
     
     // Check if CampaignStat records already exist (for resume functionality)
     const existingStats = await CampaignStat.count({
@@ -952,21 +989,36 @@ exports.sendCampaignNow = async (req, res) => {
     });
 
     if (existingStats === 0) {
-      // Create CampaignStat records for tracking
-      const campaignStats = campaign.contactList.contacts.map(contact => ({
-        campaignId: campaign.id,
-        contactId: contact.id,
-        sent: false,
-        delivered: false,
-        opened: false,
-        clicked: false,
-        bounced: false,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }));
+      // For large campaigns (>500), skip upfront CampaignStat creation to avoid timeout
+      // The worker will create them as emails are sent
+      if (campaign.contactList.contacts.length > 500) {
+        console.log(`⚡ Large campaign detected (${campaign.contactList.contacts.length} contacts) - CampaignStats will be created by worker during send`);
+      } else {
+        // Create CampaignStat records for tracking (small campaigns only)
+        const campaignStats = campaign.contactList.contacts.map(contact => ({
+          campaignId: campaign.id,
+          contactId: contact.id,
+          sent: false,
+          delivered: false,
+          opened: false,
+          clicked: false,
+          bounced: false,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        }));
 
-      await CampaignStat.bulkCreate(campaignStats, { transaction });
-      console.log(`� Created ${campaignStats.length} CampaignStat records for campaign ${campaign.id}`);
+        console.log(`📦 Creating ${campaignStats.length} CampaignStat records...`);
+        
+        // Bulk create in batches to avoid database timeouts
+        const BATCH_SIZE = 500;
+        for (let i = 0; i < campaignStats.length; i += BATCH_SIZE) {
+          const batch = campaignStats.slice(i, i + BATCH_SIZE);
+          await CampaignStat.bulkCreate(batch, { transaction });
+          console.log(`  ✓ Created batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(campaignStats.length/BATCH_SIZE)} (${batch.length} records)`);
+        }
+        
+        console.log(`✅ Created ${campaignStats.length} CampaignStat records for campaign ${campaign.id}`);
+      }
     } else {
       console.log(`� Found ${existingStats} existing CampaignStat records for campaign ${campaign.id} (resuming)`);
     }
@@ -976,13 +1028,26 @@ exports.sendCampaignNow = async (req, res) => {
     console.log(`📧 Campaign details: ${campaign.name}, Mode: ${campaign.sendingMode || 'normal'}, Contacts: ${campaign.contactList.contacts.length}`);
 
     // Prepare campaign data for the worker using our helper function
-    const campaignData = prepareCampaignDataForWorker(campaign);
-    console.log(`📦 Campaign data prepared for worker:`, {
-      id: campaignData.id,
-      recipientCount: campaignData.recipients.length,
-      sendingMode: campaignData.sendingMode,
-      emailsPerMinute: campaignData.emailsPerMinute
-    });
+    let campaignData;
+    try {
+      campaignData = prepareCampaignDataForWorker(campaign);
+      console.log(`📦 Campaign data prepared for worker:`, {
+        id: campaignData.id,
+        recipientCount: campaignData.recipients.length,
+        sendingMode: campaignData.sendingMode,
+        emailsPerMinute: campaignData.emailsPerMinute,
+        hasFromName: !!campaignData.fromName,
+        hasFromEmail: !!campaignData.fromEmail
+      });
+    } catch (prepareError) {
+      await transaction.rollback();
+      console.error(`❌ Error preparing campaign data:`, prepareError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error preparing campaign data',
+        error: prepareError.message
+      });
+    }
 
     try {
       console.log(`🔄 Step 1: Initializing campaign ${campaign.id} in worker...`);
@@ -1032,22 +1097,26 @@ exports.sendCampaignNow = async (req, res) => {
       console.error(`❌ Error details:`, {
         message: workerError.message,
         response: workerError.response?.data,
-        status: workerError.response?.status
+        status: workerError.response?.status,
+        stack: workerError.stack
       });
       return res.status(500).json({
         success: false,
         message: 'Error sending campaign through worker',
-        error: process.env.NODE_ENV === 'development' ? workerError.message : undefined,
+        error: workerError.message,
+        details: workerError.response?.data || workerError.message,
         workerError: workerError.response?.data
       });
     }
   } catch (error) {
     await transaction.rollback();
-    console.error('Send campaign error:', error);
+    console.error('❌ Send campaign error:', error);
+    console.error('❌ Error stack:', error.stack);
     return res.status(500).json({
       success: false,
       message: 'Error sending campaign',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message,
+      details: error.stack?.split('\n').slice(0, 3).join('\n')
     });
   }
 };

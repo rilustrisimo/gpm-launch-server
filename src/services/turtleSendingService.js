@@ -189,11 +189,16 @@ class TurtleSendingService {
     
     // Process template with contact data
     let emailContent = template.html || template.content || '';
+    // Support both {{first_name}} and {{firstName}} formats
     emailContent = emailContent
+      .replace(/\{\{first_name\}\}/g, contact.firstName || '')
       .replace(/\{\{firstName\}\}/g, contact.firstName || '')
+      .replace(/\{\{last_name\}\}/g, contact.lastName || '')
       .replace(/\{\{lastName\}\}/g, contact.lastName || '')
       .replace(/\{\{email\}\}/g, contact.email || '')
-      .replace(/\{\{name\}\}/g, `${contact.firstName || ''} ${contact.lastName || ''}`.trim());
+      .replace(/\{\{company\}\}/g, contact.company || '')
+      .replace(/\{\{name\}\}/g, `${contact.firstName || ''} ${contact.lastName || ''}`.trim())
+      .replace(/\{\{current_date\}\}/g, new Date().toLocaleDateString());
 
     // Add tracking pixel
     emailContent += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;">`;
