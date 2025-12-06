@@ -80,12 +80,16 @@ const executeWithRetry = async (apiCall, operation, maxRetries = MAX_RETRIES) =>
 /**
  * Helper function to prepare campaign data for worker
  * @param {Object} campaign - Campaign model instance with associations loaded
+ * @param {Array} recipients - Batch of recipients to include (optional, for batching)
  * @returns {Object} - Formatted campaign data for worker
  */
-const prepareCampaignDataForWorker = (campaign) => {
+const prepareCampaignDataForWorker = (campaign, recipients = null) => {
   if (!campaign || !campaign.template || !campaign.contactList) {
     throw new Error('Campaign data incomplete');
   }
+
+  // Use provided recipients or all contacts
+  const recipientsList = recipients || campaign.contactList.contacts || [];
 
   return {
     id: campaign.id,
@@ -102,7 +106,7 @@ const prepareCampaignDataForWorker = (campaign) => {
       subject: campaign.subject || campaign.template.subject,
       content: campaign.template.html || campaign.template.content
     },
-    recipients: (campaign.contactList.contacts || []).map(contact => ({
+    recipients: recipientsList.map(contact => ({
       id: contact.id,
       email: contact.email,
       firstName: contact.firstName || '',
@@ -1054,17 +1058,40 @@ exports.sendCampaignNow = async (req, res) => {
     }
 
     try {
-      console.log(`🔄 Step 1: Initializing campaign ${campaign.id} in worker...`);
-      console.log(`📦 Payload size: ${JSON.stringify(campaignData).length} bytes`);
-      console.log(`📧 Recipients count: ${campaignData.recipients.length}`);
+      const BATCH_SIZE = 300; // Send 300 contacts per batch to worker
+      const allRecipients = campaign.contactList.contacts || [];
+      const totalRecipients = allRecipients.length;
+      const totalBatches = Math.ceil(totalRecipients / BATCH_SIZE);
       
-      // 1. Initialize the campaign in the worker with retry mechanism
-      const initResponse = await executeWithRetry(
-        () => workerClient.post(`/api/campaign/${campaign.id}/initialize`, campaignData),
-        `Initialize campaign ${campaign.id}`
-      );
+      console.log(`🔄 Step 1: Initializing campaign ${campaign.id} in worker with ${totalBatches} batches...`);
+      console.log(`📧 Total recipients: ${totalRecipients}, Batch size: ${BATCH_SIZE}`);
       
-      console.log(`✅ Step 1 Complete: Campaign initialized in worker`, initResponse.data);
+      // Send recipients in batches
+      for (let i = 0; i < totalBatches; i++) {
+        const start = i * BATCH_SIZE;
+        const end = Math.min(start + BATCH_SIZE, totalRecipients);
+        const recipientBatch = allRecipients.slice(start, end);
+        
+        // Prepare campaign data with this batch of recipients
+        const batchData = prepareCampaignDataForWorker(campaign, recipientBatch);
+        const batchPayloadSize = JSON.stringify(batchData).length;
+        
+        console.log(`📦 Batch ${i + 1}/${totalBatches}: ${recipientBatch.length} recipients, Payload: ${(batchPayloadSize / 1024).toFixed(2)} KB`);
+        
+        // Initialize or append to campaign in worker
+        const endpoint = i === 0 
+          ? `/api/campaign/${campaign.id}/initialize` 
+          : `/api/campaign/${campaign.id}/append-recipients`;
+        
+        await executeWithRetry(
+          () => workerClient.post(endpoint, batchData),
+          `${i === 0 ? 'Initialize' : 'Append to'} campaign ${campaign.id} (batch ${i + 1}/${totalBatches})`
+        );
+        
+        console.log(`  ✅ Batch ${i + 1}/${totalBatches} sent successfully`);
+      }
+      
+      console.log(`✅ Step 1 Complete: Campaign initialized with all ${totalRecipients} recipients in ${totalBatches} batches`);
       
       console.log(`🔄 Step 2: Starting campaign ${campaign.id} in worker...`);
       // 2. Start the campaign processing with retry mechanism
