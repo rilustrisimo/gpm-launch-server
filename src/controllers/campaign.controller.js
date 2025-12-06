@@ -1058,7 +1058,7 @@ exports.sendCampaignNow = async (req, res) => {
     }
 
     try {
-      const BATCH_SIZE = 300; // Send 300 contacts per batch to worker
+      const BATCH_SIZE = 100; // Smaller batches to avoid Durable Object storage limits
       const allRecipients = campaign.contactList.contacts || [];
       const totalRecipients = allRecipients.length;
       const totalBatches = Math.ceil(totalRecipients / BATCH_SIZE);
