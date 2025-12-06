@@ -58,6 +58,10 @@ const executeWithRetry = async (apiCall, operation, maxRetries = MAX_RETRIES) =>
     } catch (error) {
       lastError = error;
       console.warn(`${operation} attempt ${attempt + 1} failed: ${error.message}`);
+      if (error.response) {
+        console.warn(`  Response status: ${error.response.status}`);
+        console.warn(`  Response data:`, error.response.data);
+      }
       
       // If this was the last attempt, rethrow the error
       if (attempt === maxRetries) {
@@ -101,9 +105,9 @@ const prepareCampaignDataForWorker = (campaign) => {
     recipients: (campaign.contactList.contacts || []).map(contact => ({
       id: contact.id,
       email: contact.email,
-      firstName: contact.firstName,
-      lastName: contact.lastName,
-      metadata: contact.metadata || {}
+      firstName: contact.firstName || '',
+      lastName: contact.lastName || ''
+      // Removed metadata to reduce payload size for large campaigns
     })),
     status: 'initialized',
     initializedAt: new Date().toISOString()
@@ -1051,6 +1055,9 @@ exports.sendCampaignNow = async (req, res) => {
 
     try {
       console.log(`🔄 Step 1: Initializing campaign ${campaign.id} in worker...`);
+      console.log(`📦 Payload size: ${JSON.stringify(campaignData).length} bytes`);
+      console.log(`📧 Recipients count: ${campaignData.recipients.length}`);
+      
       // 1. Initialize the campaign in the worker with retry mechanism
       const initResponse = await executeWithRetry(
         () => workerClient.post(`/api/campaign/${campaign.id}/initialize`, campaignData),
